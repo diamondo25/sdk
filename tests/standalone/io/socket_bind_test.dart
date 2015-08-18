@@ -110,7 +110,28 @@ testListenCloseListenClose(String host) async {
   asyncEnd();
 }
 
-void main() {
+testBindSharedUds(String name) async {
+  var address = new UnixDomainAddress(name);
+  var socket = await ServerSocket.bind(address, 0, shared: true);
+  //Expect.isTrue(socket.port == 0);
+  var socket2 = await ServerSocket.bind(address, 0, shared: true);
+  Expect.equals(socket.address.path, socket2.address.path);
+  //Expect.equals(socket.port, socket2.port);
+  await socket.close();
+  await socket2.close();
+}
+
+
+Future withTempDir(String prefix, void test(Directory dir)) async {
+  var tempDir = Directory.systemTemp.createTempSync(prefix);
+  try {
+    await test(tempDir);
+  } finally {
+    tempDir.deleteSync(recursive: true);
+  }
+}
+
+void main() async {
   for (var host in ['127.0.0.1', '::1']) {
     testBindShared(host, false);
     testBindShared(host, true);
@@ -135,4 +156,13 @@ void main() {
                                true);
     asyncEnd();
   });
+
+  // Don't run the Unix domain socket tests on Windows.
+  if (!Platform.isWindows) {
+    asyncStart();
+    await withTempDir('socket_bind_test', (Directory dir) async {
+      await testBindSharedUds('${dir.path}/xxx');
+    });
+    asyncEnd();
+  }
 }

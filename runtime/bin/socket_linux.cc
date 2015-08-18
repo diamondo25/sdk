@@ -101,6 +101,22 @@ intptr_t Socket::CreateBindConnect(const RawAddr& addr,
 }
 
 
+intptr_t Socket::CreateConnectUnix(const RawAddr& addr) {
+  intptr_t fd = Create(addr);
+  if (fd < 0) {
+    return fd;
+  }
+
+  intptr_t result = TEMP_FAILURE_RETRY(
+      connect(fd, &addr.addr, sizeof(struct sockaddr_un)));
+  if (result == 0 || errno == EINPROGRESS) {
+    return fd;
+  }
+  VOID_TEMP_FAILURE_RETRY(close(fd));
+  return -1;
+}
+
+
 intptr_t Socket::Available(intptr_t fd) {
   return FDUtils::AvailableBytes(fd);
 }
@@ -399,6 +415,29 @@ intptr_t ServerSocket::CreateBindListen(const RawAddr& addr,
     VOID_TEMP_FAILURE_RETRY(close(fd));
     errno = err;
     return new_fd;
+  }
+
+  if (NO_RETRY_EXPECTED(listen(fd, backlog > 0 ? backlog : SOMAXCONN)) != 0) {
+    VOID_TEMP_FAILURE_RETRY(close(fd));
+    return -1;
+  }
+
+  return fd;
+}
+
+
+intptr_t ServerSocket::CreateBindListenUnix(const RawAddr& addr,
+                                            intptr_t backlog) {
+  intptr_t fd;
+
+  fd = NO_RETRY_EXPECTED(
+      socket(addr.ss.ss_family, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
+  if (fd < 0) return -1;
+
+  if (NO_RETRY_EXPECTED(
+          bind(fd, &addr.addr, sizeof(struct sockaddr_un))) < 0) {
+    VOID_TEMP_FAILURE_RETRY(close(fd));
+    return -1;
   }
 
   if (NO_RETRY_EXPECTED(listen(fd, backlog > 0 ? backlog : SOMAXCONN)) != 0) {

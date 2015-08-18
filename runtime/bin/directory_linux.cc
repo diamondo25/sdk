@@ -270,6 +270,7 @@ static bool DeleteRecursively(PathBuffer* path) {
         break;
       case DT_REG:
       case DT_LNK:
+      case DT_SOCK:
         // Treat all links as files. This will delete the link which
         // is what we want no matter if the link target is a file or a
         // directory.

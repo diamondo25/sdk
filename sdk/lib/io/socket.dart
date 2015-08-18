@@ -144,6 +144,13 @@ abstract class InternetAddress {
 }
 
 
+class UnixDomainAddress {
+  final String path;
+  bool get isLoopback => false;  // HACK.
+  UnixDomainAddress(this.path);
+}
+
+
 /**
  * A [NetworkInterface] represent an active network interface on the current
  * system. It contains a list of [InternetAddress]s, that's bound to the
@@ -690,7 +697,7 @@ abstract class RawDatagramSocket extends Stream<RawSocketEvent> {
 class SocketException implements IOException {
   final String message;
   final OSError osError;
-  final InternetAddress address;
+  final /* InternetAddress or UnixDomainAddress */ address;
   final int port;
 
   const SocketException(this.message, {this.osError, this.address, this.port});

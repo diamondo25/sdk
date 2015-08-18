@@ -115,8 +115,10 @@ namespace bin {
   V(SecurityContext_UseCertificateChain, 2)                                    \
   V(ServerSocket_Accept, 2)                                                    \
   V(ServerSocket_CreateBindListen, 6)                                          \
+  V(ServerSocket_CreateBindListenUnix, 4)                                      \
   V(Socket_CreateConnect, 3)                                                   \
   V(Socket_CreateBindConnect, 4)                                               \
+  V(Socket_CreateConnectUnix, 2)                                               \
   V(Socket_CreateBindDatagram, 4)                                              \
   V(Socket_Available, 1)                                                       \
   V(Socket_Read, 2)                                                            \
