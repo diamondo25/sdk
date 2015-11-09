@@ -20,6 +20,8 @@ import 'commandline_options.dart';
 import 'common.dart';
 import 'common/tasks.dart' show
     GenericTask;
+import 'common/backend_api.dart' show
+    Backend;
 import 'compiler.dart';
 import 'diagnostics/diagnostic_listener.dart' show
     DiagnosticOptions;
@@ -72,7 +74,8 @@ class CompilerImpl extends Compiler {
            List<String> options,
            this.environment,
            [this.packageConfig,
-            this.packagesDiscoveryProvider])
+            this.packagesDiscoveryProvider,
+            Backend makeBackend(Compiler compiler)])
       : this.options = options,
         this.platformConfigUri = resolvePlatformConfig(libraryRoot, options),
         super(
@@ -132,7 +135,8 @@ class CompilerImpl extends Compiler {
                 hasOption(options, Flags.generateCodeWithCompileTimeErrors),
             testMode: hasOption(options, Flags.testMode),
             allowNativeExtensions:
-                hasOption(options, Flags.allowNativeExtensions)) {
+                hasOption(options, Flags.allowNativeExtensions),
+            makeBackend: makeBackend) {
     tasks.addAll([
         userHandlerTask = new GenericTask('Diagnostic handler', this),
         userProviderTask = new GenericTask('Input provider', this),

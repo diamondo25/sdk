@@ -34,6 +34,7 @@ import '../elements/elements.dart' show
     MetadataAnnotation;
 import '../enqueue.dart' show
     Enqueuer,
+    EnqueueTask,
     CodegenEnqueuer,
     ResolutionEnqueuer;
 import '../io/code_output.dart' show
@@ -70,7 +71,6 @@ import 'tasks.dart' show
     CompilerTask;
 import 'work.dart' show
     ItemCompilationContext;
-
 
 abstract class Backend {
   final Compiler compiler;
@@ -424,6 +424,8 @@ abstract class Backend {
   ///
   /// Returns null if there is none.
   Uri resolvePatchUri(String libraryName, Uri plaformConfigUri);
+
+  EnqueueTask makeEnqueuer() => new EnqueueTask(compiler);
 }
 
 /// Interface for resolving calls to foreign functions.
