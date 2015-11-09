@@ -16,6 +16,7 @@ import "../compiler_new.dart" as api;
 /// Empty lines are ignored.
 /// Lines starting with # are ignored.
 /// Duplicate names are not allowed.
+/// All keys and values will be passed through [String.trim].
 ///
 /// If an error is found, a [FormatException] is thrown, using [sourceUri] in
 /// the error message.
@@ -74,9 +75,8 @@ Map<String, Map<String, String>> parseIni(List<int> source,
           error("Section heading lines must end with ']'", endOfHeader + 1);
         }
         int startOfSectionName = startOfLine + 1;
-        String sectionName =
-            new String.fromCharCodes(source, startOfSectionName, endOfHeader)
-                .trim();
+        String sectionName = new String.fromCharCodes(
+            source, startOfSectionName, endOfHeader).trim();
         currentSection = new Map<String, String>();
         if (result.containsKey(sectionName)) {
           error("Duplicate section name '$sectionName'", startOfSectionName);

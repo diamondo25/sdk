@@ -8,8 +8,6 @@ import 'package:compiler/src/types/types.dart'
     show ContainerTypeMask, TypeMask;
 
 import 'compiler_helper.dart';
-import 'parser_helper.dart';
-import 'type_mask_test_helper.dart';
 
 
 String generateTest(String key, String value, bool initial) {
@@ -56,7 +54,7 @@ void doTest({String key: "'d'", String value: "5.5", bool bail: false,
   Uri uri = new Uri(scheme: 'source');
   var compiler = compilerFor(generateTest(key, value, initial), uri,
       expectedErrors: 0, expectedWarnings: 0);
-  asyncTest(() => compiler.runCompiler(uri).then((_) {
+  asyncTest(() => compiler.run(uri).then((_) {
     var typesTask = compiler.typesTask;
     var typesInferrer = typesTask.typesInferrer;
     var aDoubleType =

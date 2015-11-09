@@ -4,16 +4,23 @@
 
 library dart2js.js_emitter.lazy_emitter.model_emitter;
 
-import '../../constants/values.dart' show ConstantValue, FunctionConstantValue;
-import '../../dart2jslib.dart' show Compiler;
-import '../../elements/elements.dart' show ClassElement, FunctionElement;
+import '../../compiler.dart' show
+    Compiler;
+import '../../constants/values.dart' show
+    ConstantValue,
+    FunctionConstantValue;
+import '../../core_types.dart' show
+    CoreClasses;
+import '../../elements/elements.dart' show
+    ClassElement,
+    FunctionElement;
 import '../../js/js.dart' as js;
 import '../../js_backend/js_backend.dart' show
     JavaScriptBackend,
     Namer,
     ConstantEmitter;
 
-import '../js_emitter.dart' show AstContainer, NativeEmitter;
+import '../js_emitter.dart' show NativeEmitter;
 
 import 'package:js_runtime/shared/embedded_names.dart' show
     CREATE_NEW_ISOLATE,
@@ -129,13 +136,14 @@ class ModelEmitter {
   int emitProgram(Program program) {
     List<Fragment> fragments = program.fragments;
     MainFragment mainFragment = fragments.first;
+    Iterable<Fragment> deferredFragments = program.deferredFragments;
 
     int totalSize = 0;
 
     // We have to emit the deferred fragments first, since we need their
     // deferred hash (which depends on the output) when emitting the main
     // fragment.
-    List<js.Expression> fragmentsCode = fragments.skip(1).map(
+    List<js.Expression> fragmentsCode = deferredFragments.map(
             (DeferredFragment deferredUnit) {
       js.Expression types =
           program.metadataTypesForOutputUnit(deferredUnit.outputUnit);
@@ -207,7 +215,8 @@ class ModelEmitter {
                 'callName': js.string(namer.callNameField)}),
 
        'cyclicThrow':
-           backend.emitter.staticFunctionAccess(backend.getCyclicThrowHelper()),
+           backend.emitter.staticFunctionAccess(
+               backend.helpers.cyclicThrowHelper),
        'outputContainsConstantList': program.outputContainsConstantList,
        'embeddedGlobals': emitEmbeddedGlobals(program),
        'readMetadataTypeFunction': readMetadataTypeFunction,
@@ -339,12 +348,13 @@ class ModelEmitter {
   js.Property emitMangledGlobalNames() {
     List<js.Property> names = <js.Property>[];
 
+    CoreClasses coreClasses = compiler.coreClasses;
     // We want to keep the original names for the most common core classes when
     // calling toString on them.
     List<ClassElement> nativeClassesNeedingUnmangledName =
-        [compiler.intClass, compiler.doubleClass, compiler.numClass,
-         compiler.stringClass, compiler.boolClass, compiler.nullClass,
-         compiler.listClass];
+        [coreClasses.intClass, coreClasses.doubleClass, coreClasses.numClass,
+         coreClasses.stringClass, coreClasses.boolClass, coreClasses.nullClass,
+         coreClasses.listClass];
     nativeClassesNeedingUnmangledName.forEach((element) {
         names.add(new js.Property(js.quoteName(namer.className(element)),
                                   js.string(element.name)));

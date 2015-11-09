@@ -12,15 +12,24 @@
 namespace dart {
 namespace bin {
 
+const char* kPrecompiledLibraryName = "libprecompiled.dylib";
+const char* kPrecompiledSymbolName = "kInstructionsSnapshot";
+
 void* Extensions::LoadExtensionLibrary(const char* library_file) {
   return dlopen(library_file, RTLD_LAZY);
 }
 
 void* Extensions::ResolveSymbol(void* lib_handle, const char* symbol) {
   dlerror();
-  void* result = dlsym(lib_handle, symbol);
-  if (dlerror() != NULL) return NULL;
-  return result;
+  return dlsym(lib_handle, symbol);
+}
+
+Dart_Handle Extensions::GetError() {
+  const char* err_str = dlerror();
+  if (err_str != NULL) {
+    return Dart_NewApiError(err_str);
+  }
+  return Dart_Null();
 }
 
 }  // namespace bin

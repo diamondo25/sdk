@@ -417,7 +417,6 @@ File::Type File::GetType(const char* pathname, bool follow_links) {
   if (S_ISDIR(entry_info.st_mode)) return File::kIsDirectory;
   if (S_ISREG(entry_info.st_mode)) return File::kIsFile;
   if (S_ISLNK(entry_info.st_mode)) return File::kIsLink;
-  if (S_ISSOCK(entry_info.st_mode)) return File::kIsFile;  // HACK.
   return File::kDoesNotExist;
 }
 

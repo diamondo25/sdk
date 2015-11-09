@@ -32,6 +32,13 @@ def BuildOptions():
       action="store", type="string",
       help="output file name into which isolate snapshot in binary form " +
            "is generated")
+  result.add_option("--instructions_bin",
+      action="store", type="string",
+      help="output file name into which instructions snapshot in assembly " +
+           "form is generated")
+  result.add_option("--embedder_entry_points_manifest",
+      action="store", type="string",
+      help="input manifest with the vm entry points in a precompiled snapshot")
   result.add_option("--script",
       action="store", type="string",
       help="Dart script for which snapshot is to be generated")
@@ -52,6 +59,10 @@ def BuildOptions():
   result.add_option("--abi",
       action="store", type="string",
       help="Desired ABI for android target OS. armeabi-v7a or x86")
+  result.add_option("--timestamp_file",
+      action="store", type="string",
+      help="Path to timestamp file that will be written",
+      default="")
   return result
 
 
@@ -69,6 +80,14 @@ def ProcessOptions(options):
     sys.stderr.write('--abi requires --target_os android\n')
     return False
   return True
+
+
+def CreateTimestampFile(options):
+  if options.timestamp_file != '':
+    dir_name = os.path.dirname(options.timestamp_file)
+    if not os.path.exists(dir_name):
+      os.mkdir(dir_name)
+    open(options.timestamp_file, 'w').close()
 
 
 def Main():
@@ -96,6 +115,16 @@ def Main():
                                options.vm_output_bin ]))
   script_args.append(''.join([ "--isolate_snapshot=", options.output_bin ]))
 
+  # Setup the instuctions snapshot output filename
+  if options.instructions_bin:
+    script_args.append(''.join([ "--instructions_snapshot=",
+                                 options.instructions_bin ]))
+
+  # Specify the embedder entry points snapshot
+  if options.embedder_entry_points_manifest:
+    script_args.append(''.join([ "--embedder_entry_points_manifest=",
+                                 options.embedder_entry_points_manifest ]))
+
   # Next setup all url mapping options specified.
   for url_arg in options.url_mapping:
     url_mapping_argument = ''.join(["--url_mapping=", url_arg ])
@@ -112,6 +141,9 @@ def Main():
                      verbose=options.verbose, printErrorInfo=True)
   except Exception as e:
     return -1
+
+  # Success, update timestamp file.
+  CreateTimestampFile(options)
 
   return 0
 

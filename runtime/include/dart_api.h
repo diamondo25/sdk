@@ -131,7 +131,10 @@ typedef struct _Dart_Isolate* Dart_Isolate;
  *   occur in any function which triggers the execution of Dart code.
  *
  * - Fatal error handles are produced when the system wants to shut
- *   down the current isolate.
+ *   down the current isolate. Sometimes a fatal error may be a
+ *   restart request (see Dart_IsRestartRequest). If the embedder does
+ *   not support restarting the VM, then this should be treated as a
+ *   normal fatal error.
  *
  * --- Propagating errors ---
  *
@@ -268,6 +271,17 @@ DART_EXPORT bool Dart_IsCompilationError(Dart_Handle handle);
 DART_EXPORT bool Dart_IsFatalError(Dart_Handle handle);
 
 /**
+ * Is this error a request to restart the VM?
+ *
+ * If an embedder chooses to support restarting the VM from tools
+ * (such as a debugger), then this function is used to distinguish
+ * restart requests from other fatal errors.
+ *
+ * Requires there to be a current isolate.
+ */
+DART_EXPORT bool Dart_IsVMRestartRequest(Dart_Handle handle);
+
+/**
  * Gets the error message from an error handle.
  *
  * Requires there to be a current isolate.
@@ -367,7 +381,6 @@ DART_EXPORT void _Dart_ReportErrorHandle(const char* file,
                               #handle, Dart_GetError(__handle));               \
     }                                                                          \
   }                                                                            \
-
 
 /**
  * Converts an object to a string.
@@ -742,8 +755,14 @@ typedef struct {
  *   improve debugging messages.  The main function is not invoked by
  *   this function.
  * \param package_root The package root path for this isolate to resolve
- *   package imports against. If this parameter is NULL, the package root path
- *   of the parent isolate should be used.
+ *   package imports against. Only one of package_root and package_map
+ *   parameters is non-NULL. If neither parameter is passed the package
+ *   resolution of the parent isolate should be used.
+ * \param package_map The package map for this isolate to resolve package
+ *   imports against. The array contains alternating keys and values,
+ *   terminated by a NULL key. Only one of package_root and package_map
+ *   parameters is non-NULL. If neither parameter is passed the package
+ *   resolution of the parent isolate should be used.
  * \param flags Default flags for this isolate being spawned. Either inherited
  *   from the spawning isolate or passed as parameters when spawning the
  *   isolate from Dart code.
@@ -758,6 +777,7 @@ typedef struct {
 typedef Dart_Isolate (*Dart_IsolateCreateCallback)(const char* script_uri,
                                                    const char* main,
                                                    const char* package_root,
+                                                   const char** package_map,
                                                    Dart_IsolateFlags* flags,
                                                    void* callback_data,
                                                    char** error);
@@ -848,10 +868,24 @@ typedef void (*Dart_FileCloseCallback)(void* stream);
 typedef bool (*Dart_EntropySource)(uint8_t* buffer, intptr_t length);
 
 /**
+ * Callback provided by the embedder that is used by the vmservice isolate
+ * to request the asset archive. The asset archive must be an uncompressed tar
+ * archive that is stored in a Uint8List.
+ *
+ * If the embedder has no vmservice isolate assets, the callback can be NULL.
+ *
+ * \return The embedder must return a handle to a Uint8List containing an
+ *   uncompressed tar archive or null.
+ */
+typedef Dart_Handle (*Dart_GetVMServiceAssetsArchive)();
+
+/**
  * Initializes the VM.
  *
  * \param vm_isolate_snapshot A buffer containing a snapshot of the VM isolate
  *   or NULL if no snapshot is provided.
+ * \param instructions_snapshot A buffer containing a snapshot of precompiled
+ *   instructions, or NULL if no snapshot is provided.
  * \param create A function to be called during isolate creation.
  *   See Dart_IsolateCreateCallback.
  * \param interrupt A function to be called when an isolate is interrupted.
@@ -861,10 +895,16 @@ typedef bool (*Dart_EntropySource)(uint8_t* buffer, intptr_t length);
  * \param shutdown A function to be called when an isolate is shutdown.
  *   See Dart_IsolateShutdownCallback.
  *
- * \return True if initialization is successful.
+ * \param get_service_assets A function to be called by the service isolate when
+ *    it requires the vmservice assets archive.
+ *    See Dart_GetVMServiceAssetsArchive.
+ *
+ * \return NULL if initialization is successful. Returns an error message
+ *   otherwise. The caller is responsible for freeing the error message.
  */
-DART_EXPORT bool Dart_Initialize(
+DART_EXPORT char* Dart_Initialize(
     const uint8_t* vm_isolate_snapshot,
+    const uint8_t* instructions_snapshot,
     Dart_IsolateCreateCallback create,
     Dart_IsolateInterruptCallback interrupt,
     Dart_IsolateUnhandledExceptionCallback unhandled_exception,
@@ -873,14 +913,16 @@ DART_EXPORT bool Dart_Initialize(
     Dart_FileReadCallback file_read,
     Dart_FileWriteCallback file_write,
     Dart_FileCloseCallback file_close,
-    Dart_EntropySource entropy_source);
+    Dart_EntropySource entropy_source,
+    Dart_GetVMServiceAssetsArchive get_service_assets);
 
 /**
  * Cleanup state in the VM before process termination.
  *
- * \return True if cleanup is successful.
+ * \return NULL if cleanup is successful. Returns an error message otherwise.
+ *   The caller is responsible for freeing the error message.
  */
-DART_EXPORT bool Dart_Cleanup();
+DART_EXPORT char* Dart_Cleanup();
 
 /**
  * Sets command line flags. Should be called before Dart_Initialize.
@@ -985,14 +1027,25 @@ DART_EXPORT Dart_Handle Dart_DebugName();
 DART_EXPORT void Dart_EnterIsolate(Dart_Isolate isolate);
 
 /**
- * Notifies the VM that the current isolate is about to make a blocking call.
+ * Notifies the VM that the current thread should not be profiled until a
+ * matching call to Dart_ThreadEnableProfiling is made.
+ *
+ * NOTE: By default, if a thread has entered an isolate it will be profiled.
+ * This function should be used when an embedder knows a thread is about
+ * to make a blocking call and wants to avoid unnecessary interrupts by
+ * the profiler.
  */
-DART_EXPORT void Dart_IsolateBlocked();
+DART_EXPORT void Dart_ThreadDisableProfiling();
 
 /**
- * Notifies the VM that the current isolate is no longer blocked.
+ * Notifies the VM that the current thread should be profiled.
+ *
+ * NOTE: It is only legal to call this function *after* calling
+ *   Dart_ThreadDisableProfiling.
+ *
+ * NOTE: By default, if a thread has entered an isolate it will be profiled.
  */
-DART_EXPORT void Dart_IsolateUnblocked();
+DART_EXPORT void Dart_ThreadEnableProfiling();
 
 /**
  * Exits an isolate. After this call, Dart_CurrentIsolate will
@@ -1841,6 +1894,25 @@ DART_EXPORT Dart_Handle Dart_ListGetAt(Dart_Handle list,
                                        intptr_t index);
 
 /**
+* Gets a range of Objects from a List.
+*
+* If any of the requested index values are out of bounds, an error occurs.
+*
+* May generate an unhandled exception error.
+*
+* \param list A List.
+* \param offset The offset of the first item to get.
+* \param length The number of items to get.
+* \param result A pointer to fill with the objects.
+*
+* \return Success if no error occurs during the operation.
+*/
+DART_EXPORT Dart_Handle Dart_ListGetRange(Dart_Handle list,
+                                          intptr_t offset,
+                                          intptr_t length,
+                                          Dart_Handle* result);
+
+/**
  * Sets the Object at some index of a List.
  *
  * If the index is out of bounds, an error occurs.
@@ -2059,8 +2131,8 @@ DART_EXPORT Dart_Handle Dart_GetDataFromByteBuffer(Dart_Handle byte_buffer);
  *
  * \param type Type of object to be constructed.
  * \param constructor_name The name of the constructor to invoke.  Use
- *   Dart_Null() to invoke the unnamed constructor.  This name should
- *   not include the name of the class.
+ *   Dart_Null() or Dart_EmptyString() to invoke the unnamed constructor.
+ *   This name should not include the name of the class.
  * \param number_of_arguments Size of the arguments array.
  * \param arguments An array of arguments to the constructor.
  *
@@ -2153,6 +2225,7 @@ DART_EXPORT Dart_Handle Dart_InvokeClosure(Dart_Handle closure,
  *
  * \param target An object.
  * \param name The name of the constructor to invoke.
+ *   Use Dart_Null() or Dart_EmptyString() to invoke the unnamed constructor.
  * \param number_of_arguments Size of the arguments array.
  * \param arguments An array of arguments to the function.
  *
@@ -2653,6 +2726,15 @@ DART_EXPORT Dart_Handle Dart_LoadScriptFromSnapshot(const uint8_t* buffer,
  */
 DART_EXPORT Dart_Handle Dart_RootLibrary();
 
+
+/**
+ * Sets the root library for the current isolate.
+ *
+ * \return Returns an error handle if `library` is not a library handle.
+ */
+DART_EXPORT Dart_Handle Dart_SetRootLibrary(Dart_Handle library);
+
+
 /**
  * Lookup or instantiate a type by name and type arguments from a Library.
  *
@@ -2838,5 +2920,53 @@ DART_EXPORT bool Dart_IsServiceIsolate(Dart_Isolate isolate);
  * isolate failed to startup or does not support load requests.
  */
 DART_EXPORT Dart_Port Dart_ServiceWaitForLoadPort();
+
+
+/*
+ * ==============
+ * Precompilation
+ * ==============
+ */
+
+
+typedef struct {
+  const char* library_uri;
+  const char* class_name;
+  const char* function_name;
+} Dart_QualifiedFunctionName;
+
+
+/**
+ * Compiles all functions reachable from the provided entry points and marks
+ * the isolate to disallow future compilation.
+ *
+ * \param entry_points A list of functions that may be invoked through the
+ * embedding API, e.g. Dart_Invoke/GetField/SetField/New/InvokeClosure.
+ *
+ * \param reset_fields Controls whether static fields are reset. Fields without
+ * an initializer will be set to null, and fields with an initializer will have
+ * their initializer run the next time they are accessed.
+ *
+ * reset_fields is true when we are about to create a precompilated snapshot.
+ * Some fields are already been initialized as part of the loading logic, and
+ * we want them to be reinitialized in the new process that will load the
+ * snapshot. reset_fields is false for --noopt, which will continue running in
+ * the same process.
+ *
+ * \return An error handle if a compilation error or runtime error running const
+ * constructors was encountered.
+ */
+DART_EXPORT Dart_Handle Dart_Precompile(
+    Dart_QualifiedFunctionName entry_points[],
+    bool reset_fields);
+
+
+DART_EXPORT Dart_Handle Dart_CreatePrecompiledSnapshot(
+    uint8_t** vm_isolate_snapshot_buffer,
+    intptr_t* vm_isolate_snapshot_size,
+    uint8_t** isolate_snapshot_buffer,
+    intptr_t* isolate_snapshot_size,
+    uint8_t** instructions_snapshot_buffer,
+    intptr_t* instructions_snapshot_size);
 
 #endif  /* INCLUDE_DART_API_H_ */  /* NOLINT */

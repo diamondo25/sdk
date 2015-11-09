@@ -4,11 +4,8 @@
 
 import 'package:expect/expect.dart';
 import "package:async_helper/async_helper.dart";
-import 'package:compiler/src/types/types.dart'
-    show TypeMask;
 
 import 'compiler_helper.dart';
-import 'parser_helper.dart';
 import 'type_mask_test_helper.dart';
 
 void compileAndFind(String code,
@@ -19,7 +16,7 @@ void compileAndFind(String code,
   Uri uri = new Uri(scheme: 'source');
   var compiler = compilerFor(code, uri);
   compiler.disableInlining = disableInlining;
-  asyncTest(() => compiler.runCompiler(uri).then((_) {
+  asyncTest(() => compiler.run(uri).then((_) {
     var cls = findElement(compiler, className);
     var member = cls.lookupLocalMember(memberName);
     return check(compiler, member);
@@ -221,7 +218,7 @@ void doTest(String test, bool enableInlining, Function f) {
     enableInlining,
     (compiler, element) {
       var expectedTypes = f(compiler);
-      var signature = element.computeSignature(compiler);
+      var signature = element.functionSignature;
       int index = 0;
       var inferrer = compiler.typesTask.typesInferrer;
       signature.forEachParameter((Element element) {

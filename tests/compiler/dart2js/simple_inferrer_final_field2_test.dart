@@ -5,10 +5,10 @@
 // Test that a non-used generative constructor does not prevent
 // infering types for fields.
 
+import 'package:async_helper/async_helper.dart';
 import 'package:expect/expect.dart';
-import "package:async_helper/async_helper.dart";
+
 import 'compiler_helper.dart';
-import 'parser_helper.dart';
 
 const String TEST = """
 
@@ -27,7 +27,7 @@ main() {
 void main() {
   Uri uri = new Uri(scheme: 'source');
   var compiler = compilerFor(TEST, uri);
-  asyncTest(() => compiler.runCompiler(uri).then((_) {
+  asyncTest(() => compiler.run(uri).then((_) {
     var typesInferrer = compiler.typesTask.typesInferrer;
 
     checkFieldTypeInClass(String className, String fieldName, type) {

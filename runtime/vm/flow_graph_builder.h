@@ -28,34 +28,6 @@ class TypeArguments;
 class NestedStatement;
 class TestGraphVisitor;
 
-// List of recognized list factories:
-// (factory-name-symbol, result-cid, fingerprint).
-#define RECOGNIZED_LIST_FACTORY_LIST(V)                                        \
-  V(_ListFactory, kArrayCid, 850375012)                                        \
-  V(_GrowableListWithData, kGrowableObjectArrayCid, 2094352700)                \
-  V(_GrowableListFactory, kGrowableObjectArrayCid, 1518848600)                 \
-  V(_Int8ArrayFactory, kTypedDataInt8ArrayCid, 439914696)                      \
-  V(_Uint8ArrayFactory, kTypedDataUint8ArrayCid, 1442599030)                   \
-  V(_Uint8ClampedArrayFactory, kTypedDataUint8ClampedArrayCid, 1320015159)     \
-  V(_Int16ArrayFactory, kTypedDataInt16ArrayCid, 2132591678)                   \
-  V(_Uint16ArrayFactory, kTypedDataUint16ArrayCid, 1704816032)                 \
-  V(_Int32ArrayFactory, kTypedDataInt32ArrayCid, 1115045147)                   \
-  V(_Uint32ArrayFactory, kTypedDataUint32ArrayCid, 1385852190)                 \
-  V(_Int64ArrayFactory, kTypedDataInt64ArrayCid, 1193438555)                   \
-  V(_Uint64ArrayFactory, kTypedDataUint64ArrayCid, 410766246)                  \
-  V(_Float64ArrayFactory, kTypedDataFloat64ArrayCid, 1430631000)               \
-  V(_Float32ArrayFactory, kTypedDataFloat32ArrayCid, 1194249144)               \
-  V(_Float32x4ArrayFactory, kTypedDataFloat32x4ArrayCid, 158753569)            \
-
-
-// Class that recognizes factories and returns corresponding result cid.
-class FactoryRecognizer : public AllStatic {
- public:
-  // Return kDynamicCid if factory is not recognized.
-  static intptr_t ResultCid(const Function& factory);
-};
-
-
 // A class to collect the exits from an inlined function during graph
 // construction so they can be plugged into the caller's flow graph.
 class InlineExitCollector: public ZoneAllocated {
@@ -124,7 +96,7 @@ class InlineExitCollector: public ZoneAllocated {
 class FlowGraphBuilder : public ValueObject {
  public:
   // The inlining context is NULL if not inlining.  The osr_id is the deopt
-  // id of the OSR entry or Isolate::kNoDeoptId if not compiling for OSR.
+  // id of the OSR entry or Compiler::kNoOSRDeoptId if not compiling for OSR.
   FlowGraphBuilder(const ParsedFunction& parsed_function,
                    const ZoneGrowableArray<const ICData*>& ic_data_array,
                    InlineExitCollector* exit_collector,
@@ -164,7 +136,6 @@ class FlowGraphBuilder : public ValueObject {
 
   intptr_t next_await_counter() { return jump_count_++; }
 
-  ZoneGrowableArray<intptr_t>* await_levels() const { return await_levels_; }
   ZoneGrowableArray<JoinEntryInstr*>* await_joins() const {
     return await_joins_;
   }
@@ -211,6 +182,7 @@ class FlowGraphBuilder : public ValueObject {
   // Returns address where the constant 'value' is stored or 0 if not found.
   static uword FindDoubleConstant(double value);
 
+  Thread* thread() const { return parsed_function().thread(); }
   Isolate* isolate() const { return parsed_function().isolate(); }
   Zone* zone() const { return parsed_function().zone(); }
 
@@ -248,13 +220,12 @@ class FlowGraphBuilder : public ValueObject {
   // A stack of enclosing nested statements.
   NestedStatement* nesting_stack_;
 
-  // The deopt id of the OSR entry or Isolate::kNoDeoptId if not compiling
+  // The deopt id of the OSR entry orCompiler::kNoOSRDeoptId if not compiling
   // for OSR.
   const intptr_t osr_id_;
 
   intptr_t jump_count_;
   ZoneGrowableArray<JoinEntryInstr*>* await_joins_;
-  ZoneGrowableArray<intptr_t>* await_levels_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(FlowGraphBuilder);
 };
@@ -465,21 +436,10 @@ class EffectGraphVisitor : public AstNodeVisitor {
 
   void BuildLetTempExpressions(LetNode* node);
 
-  void BuildSyncYieldJump(LocalVariable* old_context,
-                          LocalVariable* iterator_param,
-                          const intptr_t old_ctx_level,
-                          JoinEntryInstr* target);
-
-  void BuildAsyncJump(LocalVariable* old_context,
-                      LocalVariable* continuation_result,
-                      LocalVariable* continuation_error,
-                      LocalVariable* continuation_stack_trace,
-                      const intptr_t old_ctx_level,
-                      JoinEntryInstr* target);
-
   void BuildInstanceGetterConditional(InstanceGetterNode* node);
   void BuildInstanceCallConditional(InstanceCallNode* node);
 
+  Thread* thread() const { return owner()->thread(); }
   Isolate* isolate() const { return owner()->isolate(); }
   Zone* zone() const { return owner()->zone(); }
 

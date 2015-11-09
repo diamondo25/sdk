@@ -33,7 +33,6 @@ namespace bin {
 union RawAddr {
   struct sockaddr_in in;
   struct sockaddr_in6 in6;
-  struct sockaddr_un un;
   struct sockaddr_storage ss;
   struct sockaddr addr;
 };
@@ -44,7 +43,6 @@ class SocketAddress {
     TYPE_ANY = -1,
     TYPE_IPV4,
     TYPE_IPV6,
-    TYPE_UNIX,
   };
 
   enum {
@@ -61,38 +59,17 @@ class SocketAddress {
   ~SocketAddress() {}
 
   int GetType() {
-    switch (addr_.ss.ss_family) {
-      case AF_INET: return TYPE_IPV4;
-      case AF_INET6: return TYPE_IPV6;
-      case AF_UNIX: return TYPE_UNIX;
-      default:
-        UNREACHABLE();
-        return TYPE_ANY;
-    }
+    if (addr_.ss.ss_family == AF_INET6) return TYPE_IPV6;
+    return TYPE_IPV4;
   }
 
-  const char* as_string() const {
-    if (addr_.ss.ss_family == AF_UNIX) {
-      return addr_.un.sun_path;
-    } else {
-      return as_string_;
-    }
-  }
-
+  const char* as_string() const { return as_string_; }
   const RawAddr& addr() const { return addr_; }
 
   static intptr_t GetAddrLength(const RawAddr& addr) {
-    ASSERT(addr.ss.ss_family == AF_INET ||
-           addr.ss.ss_family == AF_INET6 ||
-           addr.ss.ss_family == AF_UNIX);
-    switch (addr.ss.ss_family) {
-      case AF_INET: return sizeof(struct sockaddr_in);
-      case AF_INET6: return sizeof(struct sockaddr_in6);
-      case AF_UNIX: return sizeof(struct sockaddr_un);
-      default:
-        UNREACHABLE();
-        return 0;
-    }
+    ASSERT(addr.ss.ss_family == AF_INET || addr.ss.ss_family == AF_INET6);
+    return addr.ss.ss_family == AF_INET6 ?
+        sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
   }
 
   static intptr_t GetInAddrLength(const RawAddr& addr) {
@@ -110,13 +87,6 @@ class SocketAddress {
       return memcmp(&a.in6.sin6_addr,
                     &b.in6.sin6_addr,
                     sizeof(a.in6.sin6_addr)) == 0;
-    } else if (a.ss.ss_family == AF_UNIX) {
-      int len = sizeof(a.un.sun_path);
-      for (int i = 0; i < len; i++) {
-        if (a.un.sun_path[i] != b.un.sun_path[i]) return false;
-        if (a.un.sun_path[i] == '\0') return true;
-      }
-      return true;
     } else {
       UNREACHABLE();
       return false;
@@ -157,23 +127,16 @@ class SocketAddress {
   static void SetAddrPort(RawAddr* addr, intptr_t port) {
     if (addr->ss.ss_family == AF_INET) {
       addr->in.sin_port = htons(port);
-    } else if (addr->ss.ss_family == AF_INET6) {
-      addr->in6.sin6_port = htons(port);
     } else {
-      UNREACHABLE();
+      addr->in6.sin6_port = htons(port);
     }
   }
 
   static intptr_t GetAddrPort(const RawAddr& addr) {
     if (addr.ss.ss_family == AF_INET) {
       return ntohs(addr.in.sin_port);
-    } else if (addr.ss.ss_family == AF_INET6) {
-      return ntohs(addr.in6.sin6_port);
-    } else if (addr.ss.ss_family == AF_UNIX) {
-      return 1;  // TODO(sgjesse): Should be -1.
     } else {
-      UNREACHABLE();
-      return -1;
+      return ntohs(addr.in6.sin6_port);
     }
   }
 
@@ -293,7 +256,6 @@ class Socket {
   // specified as the port component of the passed RawAddr structure.
   static intptr_t CreateBindConnect(const RawAddr& addr,
                                     const RawAddr& source_addr);
-  static intptr_t CreateConnectUnix(const RawAddr& addr);
   // Creates a datagram socket which is bound. The port to bind
   // to is specified as the port component of the RawAddr structure.
   static intptr_t CreateBindDatagram(const RawAddr& addr, bool reuseAddress);
@@ -371,9 +333,6 @@ class ServerSocket {
                                    intptr_t backlog,
                                    bool v6_only = false);
 
-  static intptr_t CreateBindListenUnix(const RawAddr& addr,
-                                       intptr_t backlog);
-
   // Start accepting on a newly created listening socket. If it was unable to
   // start accepting incoming sockets, the fd is invalidated.
   static bool StartAccept(intptr_t fd);
@@ -424,8 +383,7 @@ class ListeningSocketRegistry {
                                RawAddr addr,
                                intptr_t backlog,
                                bool v6_only,
-                               bool shared,
-                               bool uds);
+                               bool shared);
 
   // This should be called from the event handler for every kCloseEvent it gets
   // on listening sockets.
@@ -436,13 +394,6 @@ class ListeningSocketRegistry {
   // The caller is responsible for obtaining the mutex first, before calling
   // this function.
   bool CloseSafe(intptr_t socketfd);
-
-  // Mark an existing socket as sharable if it is not already marked as
-  // sharable.
-  //
-  // NOTE: This is a temporary measure until ServerSocketReference's are
-  // removed.
-  Dart_Handle MarkSocketFdAsSharableHack(intptr_t socketfd);
 
   Mutex *mutex() { return mutex_; }
 

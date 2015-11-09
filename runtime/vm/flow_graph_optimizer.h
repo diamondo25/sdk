@@ -115,7 +115,8 @@ class FlowGraphOptimizer : public FlowGraphVisitor {
   bool TryInlineInstanceGetter(InstanceCallInstr* call,
                                bool allow_check = true);
   bool TryInlineInstanceSetter(InstanceCallInstr* call,
-                               const ICData& unary_ic_data);
+                               const ICData& unary_ic_data,
+                               bool allow_check = true);
 
   bool TryInlineInstanceMethod(InstanceCallInstr* call);
   bool TryInlineFloat32x4Constructor(StaticCallInstr* call,
@@ -180,11 +181,6 @@ class FlowGraphOptimizer : public FlowGraphVisitor {
                                         Definition** array,
                                         Definition* index,
                                         Instruction** cursor);
-
-  bool BuildByteArrayBaseLoad(InstanceCallInstr* call,
-                              intptr_t view_cid);
-  bool BuildByteArrayBaseStore(InstanceCallInstr* call,
-                               intptr_t view_cid);
 
   // Insert a check of 'to_check' determined by 'unary_checks'.  If the
   // check fails it will deoptimize to 'deopt_id' using the deoptimization
@@ -259,6 +255,8 @@ class FlowGraphOptimizer : public FlowGraphVisitor {
   bool TryStringLengthOneEquality(InstanceCallInstr* call, Token::Kind op_kind);
 
   void InstanceCallNoopt(InstanceCallInstr* instr);
+
+  RawField* GetField(intptr_t class_id, const String& field_name);
 
   Thread* thread() const { return flow_graph_->thread(); }
   Isolate* isolate() const { return flow_graph_->isolate(); }

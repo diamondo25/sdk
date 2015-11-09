@@ -6,34 +6,57 @@ library dart2js.ir_builder_task;
 
 import '../closure.dart' as closurelib;
 import '../closure.dart' hide ClosureScope;
+import '../common.dart';
+import '../common/names.dart' show
+    Names,
+    Selectors;
+import '../common/tasks.dart' show
+    CompilerTask;
+import '../compiler.dart' show
+    Compiler;
 import '../constants/expressions.dart';
 import '../dart_types.dart';
-import '../dart2jslib.dart';
 import '../elements/elements.dart';
-import '../elements/modelx.dart' show SynthesizedConstructorElementX,
-    ConstructorBodyElementX, FunctionSignatureX;
+import '../elements/modelx.dart' show
+    SynthesizedConstructorElementX,
+    ConstructorBodyElementX,
+    FunctionSignatureX;
 import '../io/source_information.dart';
-import '../js_backend/js_backend.dart' show JavaScriptBackend,
+import '../js_backend/backend_helpers.dart' show
+    BackendHelpers;
+import '../js_backend/js_backend.dart' show
+    JavaScriptBackend,
     SyntheticConstantKind;
+import '../resolution/tree_elements.dart' show
+    TreeElements;
 import '../resolution/semantic_visitor.dart';
+import '../resolution/send_resolver.dart' show
+    SendResolverMixin;
 import '../resolution/operators.dart' as op;
 import '../tree/tree.dart' as ast;
-import '../types/types.dart' show TypeMask;
-import '../universe/universe.dart' show SelectorKind, CallStructure;
-import '../constants/values.dart' show ConstantValue;
+import '../types/types.dart' show
+    TypeMask;
+import '../universe/call_structure.dart' show
+    CallStructure;
+import '../universe/selector.dart' show
+    Selector;
+import '../constants/values.dart' show
+    ConstantValue;
 import 'cps_ir_nodes.dart' as ir;
 import 'cps_ir_builder.dart';
-import '../native/native.dart' show NativeBehavior;
+import '../native/native.dart' show
+    NativeBehavior;
 
 // TODO(karlklose): remove.
 import '../js/js.dart' as js show js, Template, Expression, Name;
 import '../ssa/ssa.dart' show TypeMaskFactory;
-import '../types/types.dart' show TypeMask;
 import '../util/util.dart';
 
 import 'package:js_runtime/shared/embedded_names.dart'
     show JsBuiltin, JsGetName;
 import '../constants/values.dart';
+import 'type_mask_system.dart' show
+    TypeMaskSystem;
 
 typedef void IrBuilderCallback(Element element, ir.FunctionDefinition irNode);
 
@@ -55,21 +78,23 @@ class IrBuilderTask extends CompilerTask {
       [this.builderCallback])
       : super(compiler);
 
-  String get name => 'IR builder';
+  String get name => 'CPS builder';
 
-  ir.FunctionDefinition buildNode(AstElement element) {
+  ir.FunctionDefinition buildNode(AstElement element,
+                                  TypeMaskSystem typeMaskSystem) {
     return measure(() {
       bailoutMessage = null;
 
       TreeElements elementsMapping = element.resolvedAst.elements;
       element = element.implementation;
-      return compiler.withCurrentElement(element, () {
+      return reporter.withCurrentElement(element, () {
         SourceInformationBuilder sourceInformationBuilder =
             sourceInformationStrategy.createBuilderForContext(element);
 
         IrBuilderVisitor builder =
             new JsIrBuilderVisitor(
-                elementsMapping, compiler, sourceInformationBuilder);
+                elementsMapping, compiler, sourceInformationBuilder,
+                typeMaskSystem);
         ir.FunctionDefinition irNode = builder.buildExecutable(element);
         if (irNode == null) {
           bailoutMessage = builder.bailoutMessage;
@@ -102,11 +127,13 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
          BaseImplementationOfConstantsMixin<ir.Primitive, dynamic>,
          BaseImplementationOfNewMixin<ir.Primitive, dynamic>,
          BaseImplementationOfCompoundsMixin<ir.Primitive, dynamic>,
+         BaseImplementationOfSetIfNullsMixin<ir.Primitive, dynamic>,
          BaseImplementationOfIndexCompoundsMixin<ir.Primitive, dynamic>
     implements SemanticSendVisitor<ir.Primitive, dynamic> {
   final TreeElements elements;
   final Compiler compiler;
   final SourceInformationBuilder sourceInformationBuilder;
+  final TypeMaskSystem typeMaskSystem;
 
   /// A map from try statements in the source to analysis information about
   /// them.
@@ -137,7 +164,10 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
   /// Construct a top-level visitor.
   IrBuilderVisitor(this.elements,
                    this.compiler,
-                   this.sourceInformationBuilder);
+                   this.sourceInformationBuilder,
+                   this.typeMaskSystem);
+
+  DiagnosticReporter get reporter => compiler.reporter;
 
   String bailoutMessage = null;
 
@@ -205,6 +235,16 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
     return irBuilder.makeFunctionDefinition();
   }
 
+  /// Returns the allocation site-specific type for a given allocation.
+  ///
+  /// Currently, it is an error to call this with anything that is not the
+  /// allocation site for a List object (a literal list or a call to one
+  /// of the List constructors).
+  TypeMask getAllocationSiteType(ast.Node node) {
+    return compiler.typesTask.getGuaranteedTypeOfNode(
+        elements.analyzedElement, node);
+  }
+
   ir.Primitive visit(ast.Node node) => node.accept(this);
 
   // ## Statements ##
@@ -214,14 +254,14 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
 
   ir.Primitive visitBreakStatement(ast.BreakStatement node) {
     if (!irBuilder.buildBreak(elements.getTargetOf(node))) {
-      compiler.internalError(node, "'break' target not found");
+      reporter.internalError(node, "'break' target not found");
     }
     return null;
   }
 
   ir.Primitive visitContinueStatement(ast.ContinueStatement node) {
     if (!irBuilder.buildContinue(elements.getTargetOf(node))) {
-      compiler.internalError(node, "'continue' target not found");
+      reporter.internalError(node, "'continue' target not found");
     }
     return null;
   }
@@ -353,6 +393,16 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
     return giveup(node, 'await for');
   }
 
+  visitAwait(ast.Await node) {
+    ir.Primitive value = visit(node.expression);
+    return irBuilder.buildAwait(value);
+  }
+
+  visitYield(ast.Yield node) {
+    ir.Primitive value = visit(node.expression);
+    return irBuilder.buildYield(value, node.hasStar);
+  }
+
   visitSyncForIn(ast.SyncForIn node) {
     // [node.declaredIdentifier] can be either an [ast.VariableDefinitions]
     // (defining a new local variable) or a send designating some existing
@@ -377,6 +427,21 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
         closureScope: getClosureScopeForNode(node));
   }
 
+  /// If compiling with trusted type annotations, assumes that [value] is
+  /// now known to be `null` or an instance of [type].
+  ///
+  /// This is also where we should add type checks in checked mode, but this
+  /// is not supported yet.
+  ir.Primitive checkType(ir.Primitive value, DartType dartType) {
+    if (!compiler.trustTypeAnnotations) return value;
+    TypeMask type = typeMaskSystem.subtypesOf(dartType).nullable();
+    return irBuilder.buildRefinement(value, type);
+  }
+
+  ir.Primitive checkTypeVsElement(ir.Primitive value, TypedElement element) {
+    return checkType(value, element.type);
+  }
+
   ir.Primitive visitVariableDefinitions(ast.VariableDefinitions node) {
     assert(irBuilder.isOpen);
     for (ast.Node definition in node.definitions.nodes) {
@@ -388,6 +453,7 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
         assert(!definition.arguments.isEmpty);
         assert(definition.arguments.tail.isEmpty);
         initialValue = visit(definition.arguments.head);
+        initialValue = checkTypeVsElement(initialValue, element);
       } else {
         assert(definition is ast.Identifier);
       }
@@ -396,17 +462,41 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
     return null;
   }
 
+  static final RegExp nativeRedirectionRegExp =
+      new RegExp(r'^[a-zA-Z][a-zA-Z_$0-9]*$');
+
   // Build(Return(e), C) = C'[InvokeContinuation(return, x)]
   //   where (C', x) = Build(e, C)
   //
   // Return without a subexpression is translated as if it were return null.
-  ir.Primitive visitReturn(ast.Return node) {
+  visitReturn(ast.Return node) {
     assert(irBuilder.isOpen);
-    assert(invariant(node, node.beginToken.value != 'native'));
-    irBuilder.buildReturn(
-        value: build(node.expression),
-        sourceInformation: sourceInformationBuilder.buildReturn(node));
-    return null;
+    SourceInformation source = sourceInformationBuilder.buildReturn(node);
+    if (node.beginToken.value == 'native') {
+      FunctionElement function = irBuilder.state.currentElement;
+      assert(compiler.backend.isNative(function));
+      ast.Node nativeBody = node.expression;
+      if (nativeBody != null) {
+        ast.LiteralString jsCode = nativeBody.asLiteralString();
+        String javaScriptCode = jsCode.dartString.slowToString();
+        assert(invariant(nativeBody,
+            !nativeRedirectionRegExp.hasMatch(javaScriptCode),
+          message: "Deprecated syntax, use @JSName('name') instead."));
+        assert(invariant(nativeBody,
+            function.functionSignature.parameterCount == 0,
+            message: 'native "..." syntax is restricted to '
+              'functions with zero parameters.'));
+        irBuilder.buildNativeFunctionBody(function, javaScriptCode);
+      } else {
+        JavaScriptBackend backend = compiler.backend;
+        String name = backend.getFixedBackendName(function);
+        irBuilder.buildRedirectingNativeFunctionBody(function, name, source);
+      }
+    } else {
+      irBuilder.buildReturn(
+          value: build(node.expression),
+          sourceInformation: source);
+    }
   }
 
   visitSwitchStatement(ast.SwitchStatement node) {
@@ -446,7 +536,7 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
     ir.Primitive value = visit(node.expression);
     JumpTarget target = elements.getTargetDefinition(node);
     Element error =
-        (compiler.backend as JavaScriptBackend).getFallThroughError();
+        (compiler.backend as JavaScriptBackend).helpers.fallThroughError;
     irBuilder.buildSimpleSwitch(target, value, cases, defaultCase, error,
         sourceInformationBuilder.buildGeneric(node));
   }
@@ -554,7 +644,8 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
     }
     List<ir.Primitive> values = node.elements.nodes.mapToList(visit);
     InterfaceType type = elements.getType(node);
-    return irBuilder.buildListLiteral(type, values);
+    return irBuilder.buildListLiteral(type, values,
+        allocationSiteType: getAllocationSiteType(node));
   }
 
   ir.Primitive visitLiteralMap(ast.LiteralMap node) {
@@ -600,9 +691,8 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
     return receiver;
   }
 
-  // ## Sends ##
   @override
-  ir.Primitive visitAssert(ast.Send node, ast.Node condition, _) {
+  ir.Primitive visitAssert(ast.Assert node) {
     assert(irBuilder.isOpen);
     if (compiler.enableUserAssertions) {
       return giveup(node, 'assert in checked mode not implemented');
@@ -615,6 +705,7 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
     }
   }
 
+  // ## Sends ##
   @override
   void previsitDeferredAccess(ast.Send node, PrefixElement prefix, _) {
     giveup(node, 'deferred access is not implemented');
@@ -629,12 +720,12 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
   ir.Primitive visitExpressionInvoke(ast.Send node,
                                      ast.Node expression,
                                      ast.NodeList argumentsNode,
-                                     Selector selector, _) {
+                                     CallStructure callStructure, _) {
     ir.Primitive receiver = visit(expression);
     List<ir.Primitive> arguments = node.arguments.mapToList(visit);
-    arguments = normalizeDynamicArguments(selector.callStructure, arguments);
+    arguments = normalizeDynamicArguments(callStructure, arguments);
     return irBuilder.buildCallInvocation(
-        receiver, selector.callStructure, arguments,
+        receiver, callStructure, arguments,
         sourceInformation:
             sourceInformationBuilder.buildCall(node, argumentsNode));
   }
@@ -663,11 +754,11 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
   ir.Primitive handleDynamicGet(
       ast.Send node,
       ast.Node receiver,
-      Selector selector,
+      Name name,
       _) {
     return irBuilder.buildDynamicGet(
         translateReceiver(receiver),
-        selector,
+        new Selector.getter(name),
         elements.getTypeMask(node),
         sourceInformationBuilder.buildGet(node));
   }
@@ -676,13 +767,15 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
   ir.Primitive visitIfNotNullDynamicPropertyGet(
       ast.Send node,
       ast.Node receiver,
-      Selector selector,
+      Name name,
       _) {
     ir.Primitive target = visit(receiver);
     return irBuilder.buildIfNotNullSend(
         target,
         nested(() => irBuilder.buildDynamicGet(
-            target, selector, elements.getTypeMask(node),
+            target,
+            new Selector.getter(name),
+            elements.getTypeMask(node),
             sourceInformationBuilder.buildGet(node))));
   }
 
@@ -727,10 +820,6 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
       ast.Send node,
       MethodElement function,
       _) {
-    // TODO(karlklose): support foreign functions.
-    if (compiler.backend.isForeign(function)) {
-      return giveup(node, 'handleStaticFunctionGet: foreign: $function');
-    }
     return irBuilder.buildStaticFunctionGet(function);
   }
 
@@ -1133,9 +1222,6 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
       ast.NodeList arguments,
       CallStructure callStructure,
       _) {
-    if (compiler.backend.isForeign(getter)) {
-      return giveup(node, 'handleStaticGetterInvoke: foreign: $getter');
-    }
     ir.Primitive target = irBuilder.buildStaticGetterGet(
         getter, sourceInformationBuilder.buildGet(node));
     return irBuilder.buildCallInvocation(target,
@@ -1301,16 +1387,31 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
     return rhs.kind == CompoundKind.POSTFIX ? value : result;
   }
 
+  ir.Primitive translateSetIfNull(
+      ast.SendSet node,
+      {ir.Primitive getValue(),
+       ast.Node rhs,
+       void setValue(ir.Primitive value)}) {
+    ir.Primitive value = getValue();
+    // Unlike other compound operators if-null conditionally will not do the
+    // assignment operation.
+    return irBuilder.buildIfNull(value, nested(() {
+      ir.Primitive newValue = build(rhs);
+      setValue(newValue);
+      return newValue;
+    }));
+  }
+
   @override
   ir.Primitive handleDynamicSet(
       ast.SendSet node,
       ast.Node receiver,
-      Selector selector,
+      Name name,
       ast.Node rhs,
       _) {
     return irBuilder.buildDynamicSet(
         translateReceiver(receiver),
-        selector,
+        new Selector.setter(name),
         elements.getTypeMask(node),
         visit(rhs));
   }
@@ -1319,14 +1420,17 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
   ir.Primitive visitIfNotNullDynamicPropertySet(
       ast.SendSet node,
       ast.Node receiver,
-      Selector selector,
+      Name name,
       ast.Node rhs,
       _) {
     ir.Primitive target = visit(receiver);
     return irBuilder.buildIfNotNullSend(
         target,
         nested(() => irBuilder.buildDynamicSet(
-            target, selector, elements.getTypeMask(node), visit(rhs))));
+            target,
+            new Selector.setter(name),
+            elements.getTypeMask(node),
+            visit(rhs))));
   }
 
   @override
@@ -1335,7 +1439,9 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
       LocalElement element,
       ast.Node rhs,
       _) {
-    return irBuilder.buildLocalVariableSet(element, visit(rhs));
+    ir.Primitive value = visit(rhs);
+    value = checkTypeVsElement(value, element);
+    return irBuilder.buildLocalVariableSet(element, value);
   }
 
   @override
@@ -1401,12 +1507,22 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
   }
 
   @override
+  ir.Primitive handleTypeLiteralConstantSetIfNulls(
+      ast.SendSet node,
+      ConstantExpression constant,
+      ast.Node rhs,
+      _) {
+    // The type literal is never `null`.
+    return buildConstantExpression(constant,
+        sourceInformationBuilder.buildGet(node));
+  }
+
+  @override
   ir.Primitive handleDynamicCompounds(
       ast.SendSet node,
       ast.Node receiver,
+      Name name,
       CompoundRhs rhs,
-      Selector getterSelector,
-      Selector setterSelector,
       arg) {
     ir.Primitive target = translateReceiver(receiver);
     ir.Primitive helper() {
@@ -1414,13 +1530,16 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
           node,
           getValue: () => irBuilder.buildDynamicGet(
               target,
-              getterSelector,
+              new Selector.getter(name),
               elements.getGetterTypeMaskInComplexSendSet(node),
               sourceInformationBuilder.buildGet(node)),
           rhs: rhs,
           setValue: (ir.Primitive result) {
             irBuilder.buildDynamicSet(
-                target, setterSelector, elements.getTypeMask(node), result);
+                target,
+                new Selector.setter(name),
+                elements.getTypeMask(node),
+                result);
           });
     }
     return node.isConditional
@@ -1428,8 +1547,39 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
         : helper();
   }
 
-  ir.Primitive buildLocalNoSuchSetter(Local local, ir.Primitive value) {
-    Selector selector = new Selector.setter(local.name, null);
+  @override
+  ir.Primitive handleDynamicSetIfNulls(
+      ast.Send node,
+      ast.Node receiver,
+      Name name,
+      ast.Node rhs,
+      _) {
+    ir.Primitive target = translateReceiver(receiver);
+    ir.Primitive helper() {
+      return translateSetIfNull(
+          node,
+          getValue: () => irBuilder.buildDynamicGet(
+              target,
+              new Selector.getter(name),
+              elements.getGetterTypeMaskInComplexSendSet(node),
+              sourceInformationBuilder.buildGet(node)),
+          rhs: rhs,
+          setValue: (ir.Primitive result) {
+            irBuilder.buildDynamicSet(
+                target,
+                new Selector.setter(name),
+                elements.getTypeMask(node),
+                result);
+          });
+    }
+    return node.isConditional
+        ? irBuilder.buildIfNotNullSend(target, nested(helper))
+        : helper();
+  }
+
+  ir.Primitive buildLocalNoSuchSetter(LocalElement local, ir.Primitive value) {
+    Selector selector = new Selector.setter(
+        new Name(local.name, local.library, isSetter: true));
     return buildStaticNoSuchMethod(selector, [value]);
   }
 
@@ -1459,15 +1609,41 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
         });
   }
 
+  @override
+  ir.Primitive handleLocalSetIfNulls(
+      ast.SendSet node,
+      LocalElement local,
+      ast.Node rhs,
+      _,
+      {bool isSetterValid}) {
+    return translateSetIfNull(
+        node,
+        getValue: () {
+          if (local.isFunction) {
+            return irBuilder.buildLocalFunctionGet(local);
+          } else {
+            return irBuilder.buildLocalVariableGet(local);
+          }
+        },
+        rhs: rhs,
+        setValue: (ir.Primitive result) {
+          if (isSetterValid) {
+            irBuilder.buildLocalVariableSet(local, result);
+          } else {
+            return buildLocalNoSuchSetter(local, result);
+          }
+        });
+  }
+
   ir.Primitive buildStaticNoSuchGetter(Element element) {
     return buildStaticNoSuchMethod(
-        new Selector.getter(element.name, element.library),
+        new Selector.getter(new Name(element.name, element.library)),
         const <ir.Primitive>[]);
   }
 
   ir.Primitive buildStaticNoSuchSetter(Element element, ir.Primitive value) {
     return buildStaticNoSuchMethod(
-        new Selector.setter(element.name, element.library),
+        new Selector.setter(new Name(element.name, element.library)),
         <ir.Primitive>[value]);
   }
 
@@ -1504,16 +1680,52 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
             case CompoundSetter.SETTER:
               return irBuilder.buildStaticSetterSet(setter, result);
             case CompoundSetter.INVALID:
-              // TODO(johnniwinther): Ensure [setter] is non null.
-              return buildStaticNoSuchSetter(
-                  setter != null ? setter : getter, result);
+              return buildStaticNoSuchSetter(setter, result);
+          }
+        });
+  }
+
+  @override
+  ir.Primitive handleStaticSetIfNulls(
+      ast.SendSet node,
+      Element getter,
+      CompoundGetter getterKind,
+      Element setter,
+      CompoundSetter setterKind,
+      ast.Node rhs,
+      _) {
+    return translateSetIfNull(
+        node,
+        getValue: () {
+          switch (getterKind) {
+            case CompoundGetter.FIELD:
+              SourceInformation src = sourceInformationBuilder.buildGet(node);
+              return irBuilder.buildStaticFieldGet(getter, src);
+            case CompoundGetter.GETTER:
+              return irBuilder.buildStaticGetterGet(
+                  getter, sourceInformationBuilder.buildGet(node));
+            case CompoundGetter.METHOD:
+              return irBuilder.buildStaticFunctionGet(getter);
+            case CompoundGetter.UNRESOLVED:
+              return buildStaticNoSuchGetter(getter);
+          }
+        },
+        rhs: rhs,
+        setValue: (ir.Primitive result) {
+          switch (setterKind) {
+            case CompoundSetter.FIELD:
+              return irBuilder.buildStaticFieldSet(setter, result);
+            case CompoundSetter.SETTER:
+              return irBuilder.buildStaticSetterSet(setter, result);
+            case CompoundSetter.INVALID:
+              return buildStaticNoSuchSetter(setter, result);
           }
         });
   }
 
   ir.Primitive buildSuperNoSuchGetter(Element element, TypeMask mask) {
     return buildInstanceNoSuchMethod(
-        new Selector.getter(element.name, element.library),
+        new Selector.getter(new Name(element.name, element.library)),
         mask,
         const <ir.Primitive>[]);
   }
@@ -1522,7 +1734,7 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
                                       TypeMask mask,
                                       ir.Primitive value) {
     return buildInstanceNoSuchMethod(
-        new Selector.setter(element.name, element.library),
+        new Selector.setter(new Name(element.name, element.library)),
         mask,
         <ir.Primitive>[value]);
   }
@@ -1548,9 +1760,48 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
             case CompoundGetter.METHOD:
               return irBuilder.buildSuperMethodGet(getter);
             case CompoundGetter.UNRESOLVED:
-              // TODO(johnniwinther): Ensure [getter] is not null.
               return buildSuperNoSuchGetter(
-                  getter != null ? getter : setter,
+                  getter,
+                  elements.getGetterTypeMaskInComplexSendSet(node));
+          }
+        },
+        rhs: rhs,
+        setValue: (ir.Primitive result) {
+          switch (setterKind) {
+            case CompoundSetter.FIELD:
+              return irBuilder.buildSuperFieldSet(setter, result);
+            case CompoundSetter.SETTER:
+              return irBuilder.buildSuperSetterSet(setter, result);
+            case CompoundSetter.INVALID:
+              return buildSuperNoSuchSetter(
+                  setter, elements.getTypeMask(node), result);
+          }
+        });
+  }
+
+  @override
+  ir.Primitive handleSuperSetIfNulls(
+      ast.SendSet node,
+      Element getter,
+      CompoundGetter getterKind,
+      Element setter,
+      CompoundSetter setterKind,
+      ast.Node rhs,
+      _) {
+    return translateSetIfNull(
+        node,
+        getValue: () {
+          switch (getterKind) {
+            case CompoundGetter.FIELD:
+              return irBuilder.buildSuperFieldGet(getter);
+            case CompoundGetter.GETTER:
+              return irBuilder.buildSuperGetterGet(
+                  getter, sourceInformationBuilder.buildGet(node));
+            case CompoundGetter.METHOD:
+              return irBuilder.buildSuperMethodGet(getter);
+            case CompoundGetter.UNRESOLVED:
+              return buildSuperNoSuchGetter(
+                  getter,
                   elements.getGetterTypeMaskInComplexSendSet(node));
           }
         },
@@ -1583,6 +1834,17 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
         },
         rhs: rhs,
         setValue: (value) {}); // The binary operator will throw before this.
+  }
+
+  @override
+  ir.Primitive visitTypeVariableTypeLiteralSetIfNull(
+      ast.Send node,
+      TypeVariableElement element,
+      ast.Node rhs,
+      _) {
+    // The type variable is never `null`.
+    return translateTypeVariableTypeLiteral(element,
+        sourceInformationBuilder.buildGet(node));
   }
 
   @override
@@ -1794,7 +2056,7 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
     String nameString = Elements.reconstructConstructorName(constructor);
     Name name = new Name(nameString, constructor.library);
     return buildStaticNoSuchMethod(
-        new Selector(SelectorKind.CALL, name, callStructure),
+        new Selector.call(name, callStructure),
         translateDynamicArguments(arguments, callStructure));
   }
 
@@ -1843,8 +2105,7 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
   }
 
   @override
-  ir.Primitive bulkHandleError(ast.Send node, ErroneousElement error, _) {
-    assert(compiler.compilationFailed);
+  ir.Primitive bulkHandleError(ast.Node node, ErroneousElement error, _) {
     return irBuilder.buildNullConstant();
   }
 
@@ -1856,7 +2117,8 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
     InterfaceType type = constant.type;
     ClassElement element = type.element;
     return buildStaticNoSuchMethod(
-        new Selector.setter(element.name, element.library), [visit(rhs)]);
+        new Selector.setter(element.memberName),
+        [visit(rhs)]);
   }
 
   @override
@@ -1867,7 +2129,8 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
     TypedefType type = constant.type;
     TypedefElement element = type.element;
     return buildStaticNoSuchMethod(
-        new Selector.setter(element.name, element.library), [visit(rhs)]);
+        new Selector.setter(element.memberName),
+        [visit(rhs)]);
   }
 
   @override
@@ -1876,7 +2139,7 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
       TypeVariableElement element,
       ast.Node rhs, _) {
     return buildStaticNoSuchMethod(
-        new Selector.setter(element.name, element.library), [visit(rhs)]);
+        new Selector.setter(element.memberName), [visit(rhs)]);
   }
 
   @override
@@ -1885,7 +2148,7 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
       ConstantExpression constant,
       ast.Node rhs, _) {
     return buildStaticNoSuchMethod(
-        new Selector.setter('dynamic', null), [visit(rhs)]);
+        new Selector.setter(Names.dynamic_), [visit(rhs)]);
   }
 
   @override
@@ -1905,7 +2168,7 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
       ast.Node rhs, _) {
     // TODO(asgerf): Include class name somehow for static class members?
     return buildStaticNoSuchMethod(
-        new Selector.setter(field.name, field.library),
+        new Selector.setter(field.memberName),
         [visit(rhs)]);
   }
 
@@ -1915,7 +2178,7 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
       FieldElement field,
       ast.Node rhs, _) {
     return buildInstanceNoSuchMethod(
-        new Selector.setter(field.name, field.library),
+        new Selector.setter(field.memberName),
         elements.getTypeMask(node),
         [visit(rhs)]);
   }
@@ -1926,7 +2189,7 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
       LocalElement local,
       ast.Node rhs, _) {
     return buildStaticNoSuchMethod(
-        new Selector.setter(local.name, null),
+        new Selector.setter(new Name(local.name, local.library)),
         [visit(rhs)]);
   }
 
@@ -1937,53 +2200,52 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
       ast.Node rhs,
       _) {
     return buildStaticNoSuchMethod(
-        new Selector.setter(function.name, function.library),
+        new Selector.setter(function.memberName),
         [visit(rhs)]);
   }
 
   @override
   ir.Primitive handleStaticGetterSet(
       ast.SendSet node,
-      FunctionElement getter,
+      GetterElement getter,
       ast.Node rhs,
       _) {
     return buildStaticNoSuchMethod(
-        new Selector.setter(getter.name, getter.library),
+        new Selector.setter(getter.memberName),
         [visit(rhs)]);
   }
 
   @override
   ir.Primitive handleStaticSetterGet(
       ast.Send node,
-      FunctionElement setter,
+      SetterElement setter,
       _) {
     return buildStaticNoSuchMethod(
-        new Selector.getter(setter.name, setter.library),
+        new Selector.getter(setter.memberName),
         []);
   }
 
   @override
   ir.Primitive handleStaticSetterInvoke(
       ast.Send node,
-      FunctionElement setter,
+      SetterElement setter,
       ast.NodeList arguments,
       CallStructure callStructure, _) {
     // Translate as a method call.
     List<ir.Primitive> args = arguments.nodes.mapToList(visit);
-    Name name = new Name(setter.name, setter.library);
     return buildStaticNoSuchMethod(
-        new Selector(SelectorKind.CALL, name, callStructure),
+        new Selector.call(setter.memberName, callStructure),
         args);
   }
 
   @override
   ir.Primitive visitSuperGetterSet(
       ast.SendSet node,
-      FunctionElement getter,
+      GetterElement getter,
       ast.Node rhs,
       _) {
     return buildInstanceNoSuchMethod(
-        new Selector.setter(getter.name, getter.library),
+        new Selector.setter(getter.memberName),
         elements.getTypeMask(node),
         [visit(rhs)]);
   }
@@ -1995,7 +2257,7 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
       ast.Node rhs,
       _) {
     return buildInstanceNoSuchMethod(
-        new Selector.setter(method.name, method.library),
+        new Selector.setter(method.memberName),
         elements.getTypeMask(node),
         [visit(rhs)]);
   }
@@ -2003,9 +2265,9 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
   @override
   ir.Primitive visitSuperSetterGet(
       ast.Send node,
-      FunctionElement setter, _) {
+      SetterElement setter, _) {
     return buildInstanceNoSuchMethod(
-        new Selector.setter(setter.name, setter.library),
+        new Selector.setter(setter.memberName),
         elements.getTypeMask(node),
         []);
   }
@@ -2013,14 +2275,13 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
   @override
   ir.Primitive visitSuperSetterInvoke(
       ast.Send node,
-      FunctionElement setter,
+      SetterElement setter,
       ast.NodeList arguments,
       CallStructure callStructure, _) {
     List<ir.Primitive> args =
         translateDynamicArguments(arguments, callStructure);
-    Name name = new Name(setter.name, setter.library);
     return buildInstanceNoSuchMethod(
-        new Selector(SelectorKind.CALL, name, callStructure),
+        new Selector.call(setter.memberName, callStructure),
         elements.getTypeMask(node),
         args);
   }
@@ -2037,12 +2298,12 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
   }
 
   internalError(ast.Node node, String message) {
-    giveup(node, message);
+    reporter.internalError(node, message);
   }
 
   @override
   visitNode(ast.Node node) {
-    internalError(node, "Unhandled node");
+    giveup(node, "Unhandled node");
   }
 
   dynamic giveup(ast.Node node, [String reason]) {
@@ -2053,16 +2314,11 @@ abstract class IrBuilderVisitor extends ast.Visitor<ir.Primitive>
 
 final String ABORT_IRNODE_BUILDER = "IrNode builder aborted";
 
-/// Classifies local variables and local functions as captured, if they
-/// are accessed from within a nested function.
-///
-/// This class is specific to the [DartIrBuilder], in that it gives up if it
-/// sees a feature that is currently unsupport by that builder. In particular,
-/// loop variables captured in a for-loop initializer, condition, or update
-/// expression are unsupported.
-class DartCapturedVariables extends ast.Visitor {
+/// Determines which local variables should be boxed in a mutable variable
+/// inside a given try block.
+class TryBoxedVariables extends ast.Visitor {
   final TreeElements elements;
-  DartCapturedVariables(this.elements);
+  TryBoxedVariables(this.elements);
 
   FunctionElement currentFunction;
   bool insideInitializer = false;
@@ -2108,25 +2364,6 @@ class DartCapturedVariables extends ast.Visitor {
     node.visitChildren(this);
   }
 
-  visitFor(ast.For node) {
-    if (node.initializer != null) visit(node.initializer);
-    if (node.condition != null) visit(node.condition);
-    if (node.update != null) visit(node.update);
-
-    // Give up if a variable was captured outside of the loop body.
-    if (node.initializer is ast.VariableDefinitions) {
-      ast.VariableDefinitions definitions = node.initializer;
-      for (ast.Node node in definitions.definitions.nodes) {
-        LocalElement loopVariable = elements[node];
-        if (capturedVariables.contains(loopVariable)) {
-          return giveup(node, 'For-loop variable captured in loop header');
-        }
-      }
-    }
-
-    if (node.body != null) visit(node.body);
-  }
-
   void handleSend(ast.Send node) {
     Element element = elements[node];
     if (Elements.isLocal(element) &&
@@ -2147,8 +2384,10 @@ class DartCapturedVariables extends ast.Visitor {
     Element element = elements[node];
     if (Elements.isLocal(element)) {
       LocalElement local = element;
-      if (insideInitializer) {
-        assert(local.isParameter);
+      if (insideInitializer &&
+          local.isParameter &&
+          local.enclosingElement == currentFunction) {
+        assert(local.enclosingElement.isConstructor);
         // Initializers in an initializer-list can communicate via parameters.
         // If a parameter is stored in an initializer list we box it.
         // TODO(sigurdm): Fix this.
@@ -2176,18 +2415,20 @@ class DartCapturedVariables extends ast.Visitor {
   }
 
   visitFunctionExpression(ast.FunctionExpression node) {
-    FunctionElement oldFunction = currentFunction;
+    FunctionElement savedFunction = currentFunction;
     currentFunction = elements[node];
-    if (currentFunction.asyncMarker != AsyncMarker.SYNC) {
-      giveup(node, "cannot handle async/sync*/async* functions");
+
+    if (currentFunction.asyncMarker != AsyncMarker.SYNC &&
+        currentFunction.asyncMarker != AsyncMarker.SYNC_STAR &&
+        currentFunction.asyncMarker != AsyncMarker.ASYNC) {
+      giveup(node, "cannot handle async* functions");
     }
+
     if (node.initializers != null) {
-      insideInitializer = true;
       visit(node.initializers);
-      insideInitializer = false;
     }
     visit(node.body);
-    currentFunction = oldFunction;
+    currentFunction = savedFunction;
   }
 
   visitTryStatement(ast.TryStatement node) {
@@ -2259,21 +2500,32 @@ class GlobalProgramInformation {
   }
 
   FunctionElement get stringifyFunction {
-    return _backend.getStringInterpolationHelper();
+    return _backend.helpers.stringInterpolationHelper;
   }
 
-  FunctionElement get throwTypeErrorHelper => _backend.getThrowTypeError();
+  FunctionElement get throwTypeErrorHelper => _backend.helpers.throwTypeError;
 
-  ClassElement get nullClass => _compiler.nullClass;
+  ClassElement get nullClass => _compiler.coreClasses.nullClass;
 
-  DartType unaliasType(DartType type) => type.unalias(_compiler);
+  DartType unaliasType(DartType type) => type.unaliased;
 
   TypeMask getTypeMaskForForeign(NativeBehavior behavior) {
+    if (behavior == null) {
+      return _backend.dynamicType;
+    }
     return TypeMaskFactory.fromNativeBehavior(behavior, _compiler);
   }
 
   FieldElement locateSingleField(Selector selector, TypeMask type) {
     return _compiler.world.locateSingleField(selector, type);
+  }
+
+  Element get closureConverter {
+    return _backend.helpers.closureConverter;
+  }
+
+  void addNativeMethod(FunctionElement function) {
+    _backend.emitter.nativeEmitter.nativeMethods.add(function);
   }
 }
 
@@ -2289,9 +2541,11 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
 
   JsIrBuilderVisitor(TreeElements elements,
                      Compiler compiler,
-                     SourceInformationBuilder sourceInformationBuilder)
-      : super(elements, compiler, sourceInformationBuilder);
+                     SourceInformationBuilder sourceInformationBuilder,
+                     TypeMaskSystem typeMaskSystem)
+      : super(elements, compiler, sourceInformationBuilder, typeMaskSystem);
 
+  BackendHelpers get helpers => backend.helpers;
 
   /// Builds the IR for creating an instance of the closure class corresponding
   /// to the given nested function.
@@ -2388,6 +2642,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
           root = buildConstructorBody(element);
           break;
 
+        case ElementKind.FACTORY_CONSTRUCTOR:
         case ElementKind.FUNCTION:
         case ElementKind.GETTER:
         case ElementKind.SETTER:
@@ -2406,7 +2661,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
           break;
 
         default:
-          compiler.internalError(element, "Unexpected element type $element");
+          reporter.internalError(element, "Unexpected element type $element");
       }
       return root;
     });
@@ -2443,7 +2698,8 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
     return new JsIrBuilderVisitor(
         context.resolvedAst.elements,
         compiler,
-        sourceInformationBuilder.forContext(context));
+        sourceInformationBuilder.forContext(context),
+        typeMaskSystem);
   }
 
   /// Builds the IR for an [expression] taken from a different [context].
@@ -2551,7 +2807,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
         if (value != null) {
           instanceArguments.add(value);
         } else {
-          assert(Elements.isNativeOrExtendsNative(c));
+          assert(backend.isNativeOrExtendsNative(c));
           // Native fields are initialized elsewhere.
         }
       }, includeSuperAndInjectedMembers: true);
@@ -2616,7 +2872,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
         if (field.initializer != null) {
           fieldValues[field] = inlineExpression(field, field.initializer);
         } else {
-          if (Elements.isNativeOrExtendsNative(c)) {
+          if (backend.isNativeOrExtendsNative(c)) {
             // Native field is initialized elsewhere.
           } else {
             // Fields without an initializer default to null.
@@ -2665,7 +2921,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
               fieldValues);
           hasConstructorCall = true;
         } else {
-          compiler.internalError(initializer,
+          reporter.internalError(initializer,
                                  "Unexpected initializer type $initializer");
         }
       }
@@ -2675,7 +2931,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
       ClassElement superClass = enclosingClass.superclass;
       FunctionElement target = superClass.lookupDefaultConstructor();
       if (target == null) {
-        compiler.internalError(superClass, "No default constructor available.");
+        reporter.internalError(superClass, "No default constructor available.");
       }
       target = target.implementation;
       evaluateConstructorCallFromInitializer(
@@ -2883,8 +3139,8 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
     return parameters;
   }
 
-  DartCapturedVariables _analyzeCapturedVariables(ast.Node node) {
-    DartCapturedVariables variables = new DartCapturedVariables(elements);
+  TryBoxedVariables _analyzeTryBoxedVariables(ast.Node node) {
+    TryBoxedVariables variables = new TryBoxedVariables(elements);
     try {
       variables.analyze(node);
     } catch (e) {
@@ -2914,7 +3170,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
     // error-prone.
     // TODO(kmillikin): We should combine closure conversion and try/catch
     // variable analysis in some way.
-    DartCapturedVariables variables = _analyzeCapturedVariables(node);
+    TryBoxedVariables variables = _analyzeTryBoxedVariables(node);
     tryStatements = variables.tryStatements;
     IrBuilder builder = getBuilderFor(body);
 
@@ -2939,7 +3195,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
             element,
             node,
             elements);
-    DartCapturedVariables variables = _analyzeCapturedVariables(node);
+    TryBoxedVariables variables = _analyzeTryBoxedVariables(node);
     tryStatements = variables.tryStatements;
     IrBuilder builder = getBuilderFor(element);
     return withBuilder(builder, () => _makeFunctionBody(element, node));
@@ -3033,18 +3289,27 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
     // Use default values from the effective target, not the immediate target.
     ConstructorElement target = constructor.effectiveTarget;
     arguments = normalizeStaticArguments(callStructure, target, arguments);
+    TypeMask allocationSiteType;
+    ast.Node send = node.send;
+    if (Elements.isFixedListConstructorCall(constructor, send, compiler) ||
+        Elements.isGrowableListConstructorCall(constructor, send, compiler) ||
+        Elements.isFilledListConstructorCall(constructor, send, compiler) ||
+        Elements.isConstructorOfTypedArraySubclass(constructor, compiler)) {
+      allocationSiteType = getAllocationSiteType(send);
+    }
     return irBuilder.buildConstructorInvocation(
         target,
         callStructure,
         constructor.computeEffectiveTargetType(type),
         arguments,
-        sourceInformationBuilder.buildNew(node));
+        sourceInformationBuilder.buildNew(node),
+        allocationSiteType: allocationSiteType);
   }
 
   @override
   ir.Primitive buildStaticNoSuchMethod(Selector selector,
                                        List<ir.Primitive> arguments) {
-    Element thrower = backend.getThrowNoSuchMethod();
+    Element thrower = backend.helpers.throwNoSuchMethod;
     ir.Primitive receiver = irBuilder.buildStringConstant('');
     ir.Primitive name = irBuilder.buildStringConstant(selector.name);
     ir.Primitive argumentList = irBuilder.buildListLiteral(null, arguments);
@@ -3061,7 +3326,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
                                          List<ir.Primitive> arguments) {
     return irBuilder.buildDynamicInvocation(
         irBuilder.buildThis(),
-        compiler.noSuchMethodSelector,
+        Selectors.noSuchMethod_,
         mask,
         [irBuilder.buildInvocationMirror(selector, arguments)]);
   }
@@ -3069,7 +3334,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
   @override
   ir.Primitive buildRuntimeError(String message) {
     return irBuilder.buildStaticFunctionInvocation(
-        backend.getThrowRuntimeError(),
+        backend.helpers.throwRuntimeError,
         new CallStructure.unnamed(1),
         [irBuilder.buildStringConstant(message)]);
   }
@@ -3077,7 +3342,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
   @override
   ir.Primitive buildAbstractClassInstantiationError(ClassElement element) {
     return irBuilder.buildStaticFunctionInvocation(
-        backend.getThrowAbstractClassInstantiationError(),
+        backend.helpers.throwAbstractClassInstantiationError,
         new CallStructure.unnamed(1),
         [irBuilder.buildStringConstant(element.name)]);
   }
@@ -3127,17 +3392,16 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
 
     /// Call a helper method from the isolate library. The isolate library uses
     /// its own isolate structure, that encapsulates dart2js's isolate.
-    ir.Primitive buildIsolateHelperInvocation(String helperName,
+    ir.Primitive buildIsolateHelperInvocation(Element element,
                                               CallStructure callStructure) {
-      Element element = backend.isolateHelperLibrary.find(helperName);
       if (element == null) {
-        compiler.internalError(node,
+        reporter.internalError(node,
             'Isolate library and compiler mismatch.');
       }
       List<ir.Primitive> arguments = translateStaticArguments(argumentList,
-          element, CallStructure.TWO_ARGS);
+          element, callStructure);
       return irBuilder.buildStaticFunctionInvocation(element,
-          CallStructure.TWO_ARGS, arguments,
+          callStructure, arguments,
           sourceInformation:
                 sourceInformationBuilder.buildCall(node, node.selector));
     }
@@ -3211,7 +3475,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
         validateArgumentCount(minimum: 2);
 
         ast.Node builtin = argumentNodes.tail.head;
-        JsBuiltin value = getEnumValue(builtin, backend.jsBuiltinEnum,
+        JsBuiltin value = getEnumValue(builtin, helpers.jsBuiltinEnum,
                                        JsBuiltin.values);
         js.Template template = backend.emitter.builtinTemplateFor(value);
         List<ir.Primitive> arguments =
@@ -3249,7 +3513,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
         validateArgumentCount(exactly: 1);
 
         ast.Node argument = argumentNodes.head;
-        JsGetName id = getEnumValue(argument, backend.jsGetNameEnum,
+        JsGetName id = getEnumValue(argument, helpers.jsGetNameEnum,
             JsGetName.values);
         js.Name name = backend.namer.getNameForJsGetName(argument, id);
         ConstantValue nameConstant =
@@ -3286,12 +3550,12 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
         if (!compiler.hasIsolateSupport) {
           // If the isolate library is not used, we just generate code
           // to fetch the current isolate.
-          continue GET_STATIC_STATE;
+          continue getStaticState;
         }
-        return buildIsolateHelperInvocation('_currentIsolate',
+        return buildIsolateHelperInvocation(backend.helpers.currentIsolate,
             CallStructure.NO_ARGS);
 
-      GET_STATIC_STATE: case 'JS_GET_STATIC_STATE':
+      getStaticState: case 'JS_GET_STATIC_STATE':
         validateArgumentCount(exactly: 0);
 
         return irBuilder.buildForeignCode(
@@ -3317,7 +3581,7 @@ class JsIrBuilderVisitor extends IrBuilderVisitor {
           return irBuilder.buildCallInvocation(closure, CallStructure.NO_ARGS,
               const <ir.Primitive>[]);
         }
-        return buildIsolateHelperInvocation('_callInIsolate',
+        return buildIsolateHelperInvocation(backend.helpers.callInIsolate,
             CallStructure.TWO_ARGS);
 
       default:

@@ -300,7 +300,8 @@ class Profile : public ValueObject {
   explicit Profile(Isolate* isolate);
 
   // Build a filtered model using |filter| with the specified |tag_order|.
-  void Build(SampleFilter* filter, TagOrder tag_order, intptr_t extra_tags = 0);
+  void Build(Thread* thread,
+             SampleFilter* filter, TagOrder tag_order, intptr_t extra_tags = 0);
 
   // After building:
   int64_t min_time() const { return min_time_; }
@@ -387,7 +388,7 @@ class ProfilerService : public AllStatic {
   static void ClearSamples();
 
  private:
-  static void PrintJSONImpl(Isolate* isolate,
+  static void PrintJSONImpl(Thread* thread,
                             JSONStream* stream,
                             Profile::TagOrder tag_order,
                             intptr_t extra_tags,

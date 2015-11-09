@@ -11,7 +11,6 @@ import 'package:compiler/src/types/types.dart'
     show ContainerTypeMask, TypeMask;
 
 import 'compiler_helper.dart';
-import 'parser_helper.dart';
 import 'type_mask_test_helper.dart';
 
 const String TEST = r'''
@@ -25,7 +24,7 @@ main() {
 void main() {
   Uri uri = new Uri(scheme: 'source');
   var compiler = compilerFor(TEST, uri);
-  asyncTest(() => compiler.runCompiler(uri).then((_) {
+  asyncTest(() => compiler.run(uri).then((_) {
     var typesInferrer = compiler.typesTask.typesInferrer;
 
     checkType(String name, type) {

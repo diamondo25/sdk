@@ -557,10 +557,6 @@ class DescriptorInfoMultipleMixin : public DI {
     if (!disable_tokens_) {
       pentry->token_count += count;
     }
-    if ((!(pentry->token_count <= kTokenCount)) || (pentry->token_count < -50)) {
-      fprintf(stderr, "pentry->token_count: %p kTokenCount: %i\n",
-              reinterpret_cast<void*>(pentry->token_count), kTokenCount);
-    }
     ASSERT(pentry->token_count <= kTokenCount);
     bool is_ready = pentry->token_count > 0 && pentry->IsReady();
     if (!was_ready && is_ready) {

@@ -5,15 +5,14 @@
 part of native;
 
 void checkAllowedLibrary(ElementListener listener, Token token) {
-  LibraryElement currentLibrary = listener.compilationUnitElement.library;
-  if (currentLibrary.canUseNative) return;
+  if (listener.scannerOptions.canUseNative) return;
   listener.reportError(token, MessageKind.NATIVE_NOT_SUPPORTED);
 }
 
 Token handleNativeBlockToSkip(Listener listener, Token token) {
   checkAllowedLibrary(listener, token);
   token = token.next;
-  if (identical(token.kind, STRING_TOKEN)) {
+  if (identical(token.kind, Tokens.STRING_TOKEN)) {
     token = token.next;
   }
   if (identical(token.stringValue, '{')) {
@@ -29,7 +28,7 @@ Token handleNativeFunctionBody(ElementListener listener, Token token) {
   listener.beginReturnStatement(token);
   token = token.next;
   bool hasExpression = false;
-  if (identical(token.kind, STRING_TOKEN)) {
+  if (identical(token.kind, Tokens.STRING_TOKEN)) {
     hasExpression = true;
     listener.beginLiteralString(token);
     listener.endLiteralString(0);

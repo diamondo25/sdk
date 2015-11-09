@@ -45,7 +45,7 @@ const Map<String, LibraryInfo> libraries = const {
 
   "_blink": const LibraryInfo(
       "_blink/dartium/_blink_dartium.dart",
-      categories: "Clientd",
+      categories: "Client",
       implementation: true,
       documented: false,
       platforms: VM_PLATFORM),
@@ -127,11 +127,6 @@ const Map<String, LibraryInfo> libraries = const {
       categories: "Client,Server",
       maturity: Maturity.UNSTABLE,
       dart2jsPatchPath: "_internal/js_runtime/lib/mirrors_patch.dart"),
-
-  "profiler": const LibraryInfo(
-      "profiler/profiler.dart",
-      categories: "Client,Server",
-      maturity: Maturity.UNSTABLE),
 
   "nativewrappers": const LibraryInfo(
       "html/dartium/nativewrappers.dart",
@@ -329,7 +324,7 @@ class LibraryInfo {
    */
   List<Category> get categories {
     // `"".split(,)` returns [""] not [], so we handle that case separately.
-    if (_categories == "") return <Category>[];
+    if (_categories == "") return const <Category>[];
     return _categories.split(",").map(parseCategory).toList();
   }
 

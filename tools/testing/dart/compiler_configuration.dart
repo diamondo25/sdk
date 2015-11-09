@@ -61,6 +61,7 @@ abstract class CompilerConfiguration {
     bool useSdk = configuration['use_sdk'];
     bool isCsp = configuration['csp'];
     bool useCps = configuration['cps_ir'];
+    bool useNoopt = configuration['noopt'];
 
     switch (compiler) {
       case 'dartanalyzer':
@@ -80,7 +81,7 @@ abstract class CompilerConfiguration {
       case 'none':
         return new NoneCompilerConfiguration(
             isDebug: isDebug, isChecked: isChecked,
-            isHostChecked: isHostChecked, useSdk: useSdk);
+            isHostChecked: isHostChecked, useSdk: useSdk, useNoopt: useNoopt);
       default:
         throw "Unknown compiler '$compiler'";
     }
@@ -136,14 +137,17 @@ abstract class CompilerConfiguration {
 
 /// The "none" compiler.
 class NoneCompilerConfiguration extends CompilerConfiguration {
+  final bool useNoopt;
+
   NoneCompilerConfiguration({
       bool isDebug,
       bool isChecked,
       bool isHostChecked,
-      bool useSdk})
+      bool useSdk,
+      bool useNoopt})
       : super._subclass(
           isDebug: isDebug, isChecked: isChecked,
-          isHostChecked: isHostChecked, useSdk: useSdk);
+          isHostChecked: isHostChecked, useSdk: useSdk), useNoopt = useNoopt;
 
   bool get hasCompiler => false;
 
@@ -155,7 +159,15 @@ class NoneCompilerConfiguration extends CompilerConfiguration {
       List<String> sharedOptions,
       List<String> originalArguments,
       CommandArtifact artifact) {
-    return <String>[]
+    List<String> args = [];
+    if (isChecked) {
+      args.add('--enable_asserts');
+      args.add('--enable_type_checks');
+    }
+    if (useNoopt) {
+      args.add('--noopt');
+    }
+    return args
         ..addAll(vmOptions)
         ..addAll(sharedOptions)
         ..addAll(originalArguments);
@@ -315,6 +327,10 @@ class AnalyzerCompilerConfiguration extends CompilerConfiguration {
       CommandBuilder commandBuilder,
       List arguments,
       Map<String, String> environmentOverrides) {
+    arguments = new List.from(arguments);
+    if (isChecked) {
+      arguments.add('--enable_type_checks');
+    }
     return new CommandArtifact(
         <Command>[
             commandBuilder.getAnalysisCommand(

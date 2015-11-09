@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, the Dart project authors.
+ * Copyright (c) 2015, the Dart project authors.
  *
  * Licensed under the Eclipse Public License v1.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -361,7 +361,7 @@ public interface AnalysisServer {
    *
    * If directives of the Dart file cannot be organized, for example because it has scan or parse
    * errors, or by other reasons, ORGANIZE_DIRECTIVES_ERROR will be generated. The message will
-   * provide datails about the reason.
+   * provide details about the reason.
    *
    * @param file The Dart file to organize directives in.
    */
@@ -443,6 +443,13 @@ public interface AnalysisServer {
   public void execution_setSubscriptions(List<String> subscriptions);
 
   /**
+   * {@code experimental.getDiagnostics}
+   *
+   * Return server diagnostics.
+   */
+  public void experimental_getDiagnostics(GetDiagnosticsConsumer consumer);
+
+  /**
    * Return {@code true} if the socket is open.
    */
   public boolean isSocketOpen();
@@ -518,8 +525,9 @@ public interface AnalysisServer {
    * @param file The file containing the declaration or reference to the type for which a hierarchy
    *         is being requested.
    * @param offset The offset of the name of the type within the file.
+   * @param superOnly True if the client is only requesting superclasses and interfaces hierarchy.
    */
-  public void search_getTypeHierarchy(String file, int offset, GetTypeHierarchyConsumer consumer);
+  public void search_getTypeHierarchy(String file, int offset, boolean superOnly, GetTypeHierarchyConsumer consumer);
 
   /**
    * {@code server.getVersion}

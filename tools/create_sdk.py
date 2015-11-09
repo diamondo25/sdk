@@ -124,8 +124,8 @@ def CopyShellScript(src_file, dest_dir):
 
 
 def CopyDartScripts(home, sdk_root):
-  for executable in ['dart2js_sdk', 'dartanalyzer_sdk', 'dartfmt_sdk', 'docgen',
-                     'dartdocgen', 'pub_sdk', 'dartdoc']:
+  for executable in ['dart2js_sdk', 'dartanalyzer_sdk', 'dartfmt_sdk',
+                     'pub_sdk', 'dartdoc']:
     CopyShellScript(os.path.join(home, 'sdk', 'bin', executable),
                     os.path.join(sdk_root, 'bin'))
 
@@ -300,6 +300,7 @@ def Main():
       f.close()
 
   Copy(join(HOME, 'README.dart-sdk'), join(SDK_tmp, 'README'))
+  Copy(join(HOME, 'LICENSE'), join(SDK_tmp, 'LICENSE'))
   Copy(join(HOME, 'sdk', 'api_readme.md'), join(SDK_tmp, 'lib', 'api_readme.md'))
 
   move(SDK_tmp, SDK)

@@ -3,23 +3,23 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
-import "package:expect/expect.dart";
-import "package:async_helper/async_helper.dart";
-import "package:compiler/src/io/code_output.dart";
+import 'package:expect/expect.dart';
+import 'package:async_helper/async_helper.dart';
+import 'package:compiler/src/io/code_output.dart';
 import 'package:compiler/src/io/source_file.dart';
 import 'package:compiler/src/io/source_information.dart';
-import "mock_compiler.dart";
 import 'package:compiler/src/js_backend/js_backend.dart';
-import 'package:compiler/src/js_emitter/js_emitter.dart';
 import 'package:compiler/src/js_emitter/full_emitter/emitter.dart'
     as full show Emitter;
+
+import 'mock_compiler.dart';
 
 Future<CodeBuffer> compileAll(SourceFile sourceFile) {
   MockCompiler compiler = new MockCompiler.internal();
   Uri uri = new Uri(path: sourceFile.filename);
   compiler.sourceFiles[uri.toString()] = sourceFile;
   JavaScriptBackend backend = compiler.backend;
-  return compiler.runCompiler(uri).then((_) {
+  return compiler.run(uri).then((_) {
     // TODO(floitsch): the outputBuffers are only accessible in the full
     // emitter.
     full.Emitter fullEmitter = backend.emitter.emitter;
@@ -68,7 +68,7 @@ String FUNCTIONS_TEST = '''
 
 String RETURN_TEST = 'void main() { print(((x) { @return x; })(0)); }';
 
-String NOT_TEST = 'void main() { ((x) { if (@!x) print(x); })(false); }';
+String NOT_TEST = 'void main() { ((x) { if (@!x) print(x); })(1==2); }';
 
 String UNARY_TEST = 'void main() { ((x, y) { print(@-x + @~y); })(1,2); }';
 

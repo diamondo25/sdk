@@ -8,7 +8,6 @@ import 'package:compiler/src/types/types.dart'
     show MapTypeMask, TypeMask;
 
 import 'compiler_helper.dart';
-import 'parser_helper.dart';
 import 'type_mask_test_helper.dart';
 
 
@@ -216,7 +215,7 @@ void doTest(String allocation, [String keyElement,
   var compiler = compilerFor(generateTest(allocation), uri,
       expectedErrors: 0, expectedWarnings: 1);
   var classWorld = compiler.world;
-  asyncTest(() => compiler.runCompiler(uri).then((_) {
+  asyncTest(() => compiler.run(uri).then((_) {
     var keyType, valueType;
     var typesTask = compiler.typesTask;
     var typesInferrer = typesTask.typesInferrer;

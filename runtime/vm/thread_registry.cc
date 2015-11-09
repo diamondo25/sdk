@@ -10,6 +10,7 @@
 namespace dart {
 
 ThreadRegistry::~ThreadRegistry() {
+  // Delete monitor.
   delete monitor_;
 }
 
@@ -32,7 +33,7 @@ void ThreadRegistry::SafepointThreads() {
   // TODO(koda): Rename Thread::PrepareForGC and call it here?
   --remaining_;  // Exclude this thread from the count.
   // Ensure the main mutator will reach a safepoint (could be running Dart).
-  if (!isolate->MutatorThreadIsCurrentThread()) {
+  if (!Thread::Current()->IsMutatorThread()) {
     isolate->ScheduleInterrupts(Isolate::kVMInterrupt);
   }
   while (remaining_ > 0) {
@@ -65,11 +66,7 @@ void ThreadRegistry::PruneThread(Thread* thread) {
   if (found_index < 0) {
     return;
   }
-  if (found_index != (length - 1)) {
-    // Swap with last entry.
-    entries_.Swap(found_index, length - 1);
-  }
-  entries_.RemoveLast();
+  entries_.RemoveAt(found_index);
 }
 
 

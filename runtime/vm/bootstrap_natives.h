@@ -70,6 +70,8 @@ namespace dart {
   V(Bigint_allocate, 4)                                                        \
   V(Developer_debugger, 2)                                                     \
   V(Developer_inspect, 1)                                                      \
+  V(Developer_lookupExtension, 1)                                              \
+  V(Developer_registerExtension, 2)                                            \
   V(Developer_log, 8)                                                          \
   V(Double_getIsNegative, 1)                                                   \
   V(Double_getIsInfinite, 1)                                                   \
@@ -142,16 +144,23 @@ namespace dart {
   V(Random_nextState, 1)                                                       \
   V(Random_setupSeed, 1)                                                       \
   V(Random_initialSeed, 0)                                                     \
+  V(SecureRandom_getBytes, 1)                                                  \
   V(DateNatives_currentTimeMillis, 0)                                          \
   V(DateNatives_timeZoneName, 1)                                               \
   V(DateNatives_timeZoneOffsetInSeconds, 1)                                    \
   V(DateNatives_localTimeZoneAdjustmentInSeconds, 0)                           \
   V(AssertionError_throwNew, 2)                                                \
+  V(Async_rethrow, 2)                                                          \
   V(TypeError_throwNew, 5)                                                     \
   V(FallThroughError_throwNew, 1)                                              \
   V(AbstractClassInstantiationError_throwNew, 2)                               \
   V(Stopwatch_now, 0)                                                          \
   V(Stopwatch_frequency, 0)                                                    \
+  V(Timeline_getIsolateNum, 0)                                                 \
+  V(Timeline_getNextAsyncId, 0)                                                \
+  V(Timeline_getTraceClock, 0)                                                 \
+  V(Timeline_reportCompleteEvent, 5)                                           \
+  V(Timeline_reportTaskEvent, 6)                                               \
   V(TypedData_Int8Array_new, 1)                                                \
   V(TypedData_Uint8Array_new, 1)                                               \
   V(TypedData_Uint8ClampedArray_new, 1)                                        \
@@ -300,7 +309,7 @@ namespace dart {
   V(Int32x4_setFlagW, 2)                                                       \
   V(Int32x4_select, 3)                                                         \
   V(Isolate_spawnFunction, 7)                                                  \
-  V(Isolate_spawnUri, 10)                                                      \
+  V(Isolate_spawnUri, 12)                                                      \
   V(Isolate_getPortAndCapabilitiesOfCurrentIsolate, 0)                         \
   V(Isolate_sendOOB, 2)                                                        \
   V(Mirrors_evalInLibraryWithPrivateKey, 2)                                    \
@@ -389,7 +398,13 @@ namespace dart {
   V(Profiler_getCurrentTag, 0)                                                 \
   V(ClassID_getID, 1)                                                          \
   V(Num_toString, 1)                                                           \
-
+  V(VMService_SendIsolateServiceMessage, 2)                                    \
+  V(VMService_SendRootServiceMessage, 1)                                       \
+  V(VMService_OnStart, 0)                                                      \
+  V(VMService_OnExit, 0)                                                       \
+  V(VMService_ListenStream, 1)                                                 \
+  V(VMService_CancelStream, 1)                                                 \
+  V(VMService_RequestAssets, 0)                                                \
 
 class BootstrapNatives : public AllStatic {
  public:

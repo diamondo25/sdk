@@ -13,42 +13,51 @@ import 'package:js_runtime/shared/embedded_names.dart' show
     JsGetName;
 
 import '../headers.dart';
-
 import '../js_emitter.dart' hide Emitter;
 import '../js_emitter.dart' as js_emitter show Emitter;
-
 import '../model.dart';
 import '../program_builder/program_builder.dart';
 
 import '../../common.dart';
-
+import '../../common/names.dart' show
+    Names;
+import '../../compiler.dart' show
+    Compiler;
 import '../../constants/values.dart';
-
+import '../../core_types.dart' show
+    CoreClasses;
+import '../../dart_types.dart' show
+    DartType;
 import '../../deferred_load.dart' show OutputUnit;
-
 import '../../elements/elements.dart' show
+    ClassElement,
     ConstructorBodyElement,
+    Element,
+    Elements,
     ElementKind,
     FieldElement,
-    ParameterElement,
-    TypeVariableElement,
+    FunctionElement,
+    FunctionSignature,
+    LibraryElement,
+    MetadataAnnotation,
     MethodElement,
-    MemberElement;
-
+    MemberElement,
+    Name,
+    ParameterElement,
+    TypedefElement,
+    TypeVariableElement,
+    VariableElement;
 import '../../hash/sha1.dart' show Hasher;
-
 import '../../io/code_output.dart';
-
 import '../../io/line_column_provider.dart' show
     LineColumnCollector,
     LineColumnProvider;
-
 import '../../io/source_map_builder.dart' show
     SourceMapBuilder;
-
 import '../../js/js.dart' as jsAst;
 import '../../js/js.dart' show js;
-
+import '../../js_backend/backend_helpers.dart' show
+    BackendHelpers;
 import '../../js_backend/js_backend.dart' show
     CheckedModeHelper,
     CompoundName,
@@ -64,7 +73,10 @@ import '../../js_backend/js_backend.dart' show
     TypeCheck,
     TypeChecks,
     TypeVariableHandler;
-
+import '../../universe/call_structure.dart' show
+    CallStructure;
+import '../../universe/selector.dart' show
+    Selector;
 import '../../util/characters.dart' show
     $$,
     $A,
@@ -73,12 +85,9 @@ import '../../util/characters.dart' show
     $Z,
     $a,
     $z;
-
 import '../../util/uri_extras.dart' show
     relativize;
-
 import '../../util/util.dart' show
-    NO_LOCATION_SPANNABLE,
     equalElements;
 
 part 'class_builder.dart';
@@ -126,6 +135,7 @@ class Emitter implements js_emitter.Emitter {
   ConstantEmitter constantEmitter;
   NativeEmitter get nativeEmitter => task.nativeEmitter;
   TypeTestRegistry get typeTestRegistry => task.typeTestRegistry;
+  CoreClasses get coreClasses => compiler.coreClasses;
 
   // The full code that is written to each hunk part-file.
   Map<OutputUnit, CodeOutput> outputBuffers = new Map<OutputUnit, CodeOutput>();
@@ -186,6 +196,8 @@ class Emitter implements js_emitter.Emitter {
     nsmEmitter.emitter = this;
     interceptorEmitter.emitter = this;
   }
+
+  DiagnosticReporter get reporter => compiler.reporter;
 
   List<jsAst.Node> cspPrecompiledFunctionFor(OutputUnit outputUnit) {
     return _cspPrecompiledFunctions.putIfAbsent(
@@ -363,14 +375,14 @@ class Emitter implements js_emitter.Emitter {
     switch (builtin) {
       case JsBuiltin.dartObjectConstructor:
         return jsAst.js.expressionTemplateYielding(
-            typeAccess(compiler.objectClass));
+            typeAccess(coreClasses.objectClass));
 
       case JsBuiltin.isCheckPropertyToJsConstructorName:
         int isPrefixLength = namer.operatorIsPrefix.length;
         return jsAst.js.expressionTemplateFor('#.substring($isPrefixLength)');
 
       case JsBuiltin.isFunctionType:
-        return backend.rti.representationGenerator.templateForIsFunctionType;
+        return backend.rtiEncoder.templateForIsFunctionType;
 
       case JsBuiltin.rawRtiToJsConstructorName:
         return jsAst.js.expressionTemplateFor("#.$typeNameProperty");
@@ -379,8 +391,7 @@ class Emitter implements js_emitter.Emitter {
         return jsAst.js.expressionTemplateFor("#.constructor");
 
       case JsBuiltin.createFunctionTypeRti:
-        return backend.rti.representationGenerator
-            .templateForCreateFunctionType;
+        return backend.rtiEncoder.templateForCreateFunctionType;
 
       case JsBuiltin.isSubtype:
         // TODO(floitsch): move this closer to where is-check properties are
@@ -410,7 +421,7 @@ class Emitter implements js_emitter.Emitter {
         return jsAst.js.expressionTemplateFor("$functionGettersMap[#]()");
 
       default:
-        compiler.internalError(NO_LOCATION_SPANNABLE,
+        reporter.internalError(NO_LOCATION_SPANNABLE,
             "Unhandled Builtin: $builtin");
         return null;
     }
@@ -439,13 +450,13 @@ class Emitter implements js_emitter.Emitter {
   /// In minified mode we want to keep the name for the most common core types.
   bool _isNativeTypeNeedingReflectionName(Element element) {
     if (!element.isClass) return false;
-    return (element == compiler.intClass ||
-            element == compiler.doubleClass ||
-            element == compiler.numClass ||
-            element == compiler.stringClass ||
-            element == compiler.boolClass ||
-            element == compiler.nullClass ||
-            element == compiler.listClass);
+    return (element == coreClasses.intClass ||
+            element == coreClasses.doubleClass ||
+            element == coreClasses.numClass ||
+            element == coreClasses.stringClass ||
+            element == coreClasses.boolClass ||
+            element == coreClasses.nullClass ||
+            element == coreClasses.listClass);
   }
 
   /// Returns the "reflection name" of an [Element] or [Selector].
@@ -549,7 +560,7 @@ class Emitter implements js_emitter.Emitter {
     } else if (element.isTypedef) {
       return element.name;
     }
-    throw compiler.internalError(element,
+    throw reporter.internalError(element,
         'Do not know how to reflect on this $element.');
   }
 
@@ -587,7 +598,7 @@ class Emitter implements js_emitter.Emitter {
   void assembleClass(Class cls, ClassBuilder enclosingBuilder,
                      Fragment fragment) {
     ClassElement classElement = cls.element;
-    compiler.withCurrentElement(classElement, () {
+    reporter.withCurrentElement(classElement, () {
       if (compiler.hasIncrementalSupport) {
         ClassBuilder cachedBuilder =
             cachedClassBuilders.putIfAbsent(classElement, () {
@@ -640,7 +651,7 @@ class Emitter implements js_emitter.Emitter {
     // [fields] is `null`.
     if (fields != null) {
       for (Element element in fields) {
-        compiler.withCurrentElement(element, () {
+        reporter.withCurrentElement(element, () {
           ConstantValue constant = handler.getInitialValueFor(element);
           parts.add(buildInitialization(element, constantReference(constant)));
         });
@@ -654,7 +665,7 @@ class Emitter implements js_emitter.Emitter {
           (OutputUnit fieldsOutputUnit, Iterable<VariableElement> fields) {
         if (fieldsOutputUnit == outputUnit) return;  // Skip the main unit.
         for (Element element in fields) {
-          compiler.withCurrentElement(element, () {
+          reporter.withCurrentElement(element, () {
             parts.add(buildInitialization(element, jsAst.number(0)));
           });
         }
@@ -802,9 +813,11 @@ class Emitter implements js_emitter.Emitter {
 
   jsAst.Statement buildConstantInitializer(ConstantValue constant) {
     jsAst.Name name = namer.constantName(constant);
-    return js.statement('#.# = #',
+    jsAst.Statement initializer = js.statement('#.# = #',
                         [namer.globalObjectForConstant(constant), name,
                          constantInitializerExpression(constant)]);
+    compiler.dumpInfoTask.registerConstantAst(constant, initializer);
+    return initializer;
   }
 
   jsAst.Expression constantListGenerator(jsAst.Expression array) {
@@ -832,12 +845,12 @@ class Emitter implements js_emitter.Emitter {
   jsAst.Statement buildFunctionThatReturnsNull() {
     return js.statement('#.# = function() {}',
                         [namer.isolateName,
-                         backend.rti.getFunctionThatReturnsNullName]);
+                         backend.rtiEncoder.getFunctionThatReturnsNullName]);
   }
 
   jsAst.Expression generateFunctionThatReturnsNull() {
     return js("#.#", [namer.isolateName,
-                      backend.rti.getFunctionThatReturnsNullName]);
+                      backend.rtiEncoder.getFunctionThatReturnsNullName]);
   }
 
   buildMain(jsAst.Statement invokeMain) {
@@ -879,7 +892,7 @@ class Emitter implements js_emitter.Emitter {
     jsAst.Expression finishedClassesAccess =
         generateEmbeddedGlobalAccess(embeddedNames.FINISHED_CLASSES);
     jsAst.Expression cyclicThrow =
-        staticFunctionAccess(backend.getCyclicThrowHelper());
+        staticFunctionAccess(backend.helpers.cyclicThrowHelper);
     jsAst.Expression laziesAccess =
         generateEmbeddedGlobalAccess(embeddedNames.LAZIES);
 
@@ -893,8 +906,8 @@ class Emitter implements js_emitter.Emitter {
         #finishedClasses = map();
 
         if (#needsLazyInitializer) {
-          // [staticName] is only provided in non-minified mode. If missing, we 
-          // fall back to [fieldName]. Likewise, [prototype] is optional and 
+          // [staticName] is only provided in non-minified mode. If missing, we
+          // fall back to [fieldName]. Likewise, [prototype] is optional and
           // defaults to the isolateProperties object.
           $lazyInitializerName = function (fieldName, getterName, lazyValue,
                                            staticName, prototype) {
@@ -1004,7 +1017,7 @@ class Emitter implements js_emitter.Emitter {
             'outputContainsConstantList': outputContainsConstantList,
             'makeConstListProperty': makeConstListProperty,
             'functionThatReturnsNullProperty':
-                backend.rti.getFunctionThatReturnsNullName,
+                backend.rtiEncoder.getFunctionThatReturnsNullName,
             'hasIncrementalSupport': compiler.hasIncrementalSupport,
             'lazyInitializerProperty': lazyInitializerProperty,});
   }
@@ -1082,7 +1095,7 @@ class Emitter implements js_emitter.Emitter {
 
     String libraryName =
         (!compiler.enableMinification || backend.mustRetainLibraryNames) ?
-        library.getLibraryName() :
+        library.libraryName :
         "";
 
     jsAst.Fun metadata = task.metadataCollector.buildMetadataFunction(library);
@@ -1179,8 +1192,8 @@ class Emitter implements js_emitter.Emitter {
       // We can be pretty sure that the objectClass is initialized, since
       // typedefs are only emitted with reflection, which requires lots of
       // classes.
-      assert(compiler.objectClass != null);
-      builder.superName = namer.className(compiler.objectClass);
+      assert(coreClasses.objectClass != null);
+      builder.superName = namer.className(coreClasses.objectClass);
       jsAst.Node declaration = builder.toObjectInitializer();
       jsAst.Name mangledName = namer.globalPropertyName(typedef);
       String reflectionName = getReflectionName(typedef, mangledName);
@@ -1325,12 +1338,12 @@ class Emitter implements js_emitter.Emitter {
           Elements.sortedByPosition(elements.where((e) => !e.isLibrary));
 
       pendingStatics.forEach((element) =>
-          compiler.reportInfo(
+          reporter.reportInfo(
               element, MessageKind.GENERIC, {'text': 'Pending statics.'}));
     }
 
     if (pendingStatics != null && !pendingStatics.isEmpty) {
-      compiler.internalError(pendingStatics.first,
+      reporter.internalError(pendingStatics.first,
           'Pending statics (see above).');
     }
   }
@@ -1805,7 +1818,8 @@ function(originalDescriptor, name, holder, isStatic, globalFunctionsAccess) {
 
     if (backend.requiresPreamble &&
         !backend.htmlLibraryIsLoaded) {
-      compiler.reportHint(NO_LOCATION_SPANNABLE, MessageKind.PREAMBLE);
+      reporter.reportHintMessage(
+          NO_LOCATION_SPANNABLE, MessageKind.PREAMBLE);
     }
     // Return the total program size.
     return outputBuffers.values.fold(0, (a, b) => a + b.length);
@@ -1824,21 +1838,23 @@ function(originalDescriptor, name, holder, isStatic, globalFunctionsAccess) {
 
   ClassBuilder getElementDescriptor(Element element, Fragment fragment) {
     Element owner = element.library;
-    if (!element.isLibrary && !element.isTopLevel && !element.isNative) {
+    if (!element.isLibrary &&
+        !element.isTopLevel &&
+        !backend.isNative(element)) {
       // For static (not top level) elements, record their code in a buffer
       // specific to the class. For now, not supported for native classes and
       // native elements.
       ClassElement cls =
           element.enclosingClassOrCompilationUnit.declaration;
       if (compiler.codegenWorld.directlyInstantiatedClasses.contains(cls) &&
-          !cls.isNative &&
+          !backend.isNative(cls) &&
           compiler.deferredLoadTask.outputUnitForElement(element) ==
               compiler.deferredLoadTask.outputUnitForElement(cls)) {
         owner = cls;
       }
     }
     if (owner == null) {
-      compiler.internalError(element, 'Owner is null.');
+      reporter.internalError(element, 'Owner is null.');
     }
     return elementDescriptors
         .putIfAbsent(fragment, () => new Map<Element, ClassBuilder>())
@@ -1975,10 +1991,6 @@ function(originalDescriptor, name, holder, isStatic, globalFunctionsAccess) {
           ..add(js.statement('${typesAccess}.push.apply(${typesAccess}, '
                              '${namer.deferredTypesName});'));
 
-      // Sets the static state variable to the state of the current isolate
-      // (which is provided as second argument).
-      body.add(js.statement("${namer.staticStateHolder} = arguments[1];"));
-
       body.add(buildCompileTimeConstants(fragment.constants,
                                          isMainFragment: false));
       body.add(buildStaticNonFinalFieldInitializations(outputUnit));
@@ -1988,7 +2000,7 @@ function(originalDescriptor, name, holder, isStatic, globalFunctionsAccess) {
       statements
           ..add(buildGeneratedBy())
           ..add(js.statement('${deferredInitializers}.current = '
-                             """function (#) {
+                             """function (#, ${namer.staticStateHolder}) {
                                   #
                                 }
                              """, [globalsHolder, body]));

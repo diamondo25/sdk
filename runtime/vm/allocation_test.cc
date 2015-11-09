@@ -32,7 +32,7 @@ class TestValueObject : public ValueObject {
 class TestStackResource : public StackResource {
  public:
   explicit TestStackResource(int* ptr)
-      : StackResource(Isolate::Current()), ptr_(ptr) {
+      : StackResource(Thread::Current()), ptr_(ptr) {
     EXPECT_EQ(1, *ptr_);
     *ptr_ = 2;
   }
@@ -53,7 +53,7 @@ class TestStackResource : public StackResource {
 class TestStackedStackResource : public StackResource {
  public:
   explicit TestStackedStackResource(int* ptr)
-      : StackResource(Isolate::Current()), ptr_(ptr) {
+      : StackResource(Thread::Current()), ptr_(ptr) {
     EXPECT_EQ(3, *ptr_);
     *ptr_ = 4;
   }
@@ -153,7 +153,7 @@ static void StackResourceLongJumpHelper(int* ptr, LongJumpScope* jump) {
 
 
 TEST_CASE(StackResourceLongJump) {
-  LongJumpScope* base = Isolate::Current()->long_jump_base();
+  LongJumpScope* base = Thread::Current()->long_jump_base();
   {
     LongJumpScope jump;
     int data = 1;
@@ -163,7 +163,7 @@ TEST_CASE(StackResourceLongJump) {
     }
     EXPECT_EQ(7, data);
   }
-  ASSERT(base == Isolate::Current()->long_jump_base());
+  ASSERT(base == Thread::Current()->long_jump_base());
 }
 
 }  // namespace dart

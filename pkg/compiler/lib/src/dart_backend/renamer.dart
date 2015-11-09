@@ -135,7 +135,7 @@ class PlaceholderRenamer {
 
   String _renameGlobal(Entity entity) {
     assert(entity is! Element ||
-           Elements.isErroneous(entity) ||
+           Elements.isMalformed(entity) ||
            Elements.isStaticOrTopLevel(entity) ||
            entity is TypeVariableElement);
     // TODO(smok): We may want to reuse class static field and method names.
@@ -146,7 +146,7 @@ class PlaceholderRenamer {
       }
       if (library.isPlatformLibrary) {
         // TODO(johnniwinther): Handle prefixes for dart:core.
-        if (library.canonicalUri == Compiler.DART_CORE) return entity.name;
+        if (library.canonicalUri == Uris.dart_core) return entity.name;
         if (library.isInternalLibrary) {
           throw new SpannableAssertionFailure(entity,
               "Internal library $library should never have been imported from "

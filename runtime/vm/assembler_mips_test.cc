@@ -1639,6 +1639,21 @@ ASSEMBLER_TEST_RUN(Movd, test) {
 }
 
 
+ASSEMBLER_TEST_GENERATE(Negd, assembler) {
+  __ LoadImmediate(D1, 1.0);
+  __ negd(D0, D1);
+  __ Ret();
+}
+
+
+ASSEMBLER_TEST_RUN(Negd, test) {
+  typedef double (*SimpleCode)() DART_UNUSED;
+  EXPECT(test != NULL);
+  double res = EXECUTE_TEST_CODE_DOUBLE(SimpleCode, test->entry());
+  EXPECT_FLOAT_EQ(-1.0, res, 0.001);
+}
+
+
 ASSEMBLER_TEST_GENERATE(Sdc1Ldc1, assembler) {
   __ mov(T0, SP);
   __ AddImmediate(SP, -3 * kWordSize);
@@ -2083,23 +2098,21 @@ ASSEMBLER_TEST_RUN(Cop1CvtSD, test) {
 
 // Called from assembler_test.cc.
 // RA: return address.
-// A0: context.
-// A1: value.
-// A2: growable array.
-// A3: current thread.
+// A0: value.
+// A1: growable array.
+// A2: current thread.
 ASSEMBLER_TEST_GENERATE(StoreIntoObject, assembler) {
   __ addiu(SP, SP, Immediate(-3 * kWordSize));
-  __ sw(THR, Address(SP, 2 * kWordSize));
-  __ sw(CTX, Address(SP, 1 * kWordSize));
+  __ sw(CODE_REG, Address(SP, 2 * kWordSize));
+  __ sw(THR, Address(SP, 1 * kWordSize));
   __ sw(RA, Address(SP, 0 * kWordSize));
-  __ mov(CTX, A0);
-  __ mov(THR, A3);
-  __ StoreIntoObject(A2,
-                     FieldAddress(A2, GrowableObjectArray::data_offset()),
-                     A1);
+  __ mov(THR, A2);
+  __ StoreIntoObject(A1,
+                     FieldAddress(A1, GrowableObjectArray::data_offset()),
+                     A0);
   __ lw(RA, Address(SP, 0 * kWordSize));
-  __ lw(CTX, Address(SP, 1 * kWordSize));
-  __ lw(THR, Address(SP, 2 * kWordSize));
+  __ lw(THR, Address(SP, 1 * kWordSize));
+  __ lw(CODE_REG, Address(SP, 2 * kWordSize));
   __ addiu(SP, SP, Immediate(3 * kWordSize));
   __ Ret();
 }

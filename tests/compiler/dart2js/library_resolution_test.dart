@@ -16,15 +16,12 @@ import "package:async_helper/async_helper.dart";
 
 import 'package:expect/expect.dart' show Expect;
 
-import 'package:compiler/src/elements/elements.dart' show
-    LibraryElement;
+import 'package:compiler/src/diagnostics/messages.dart'
+    show MessageKind, MessageTemplate;
 
-import 'package:compiler/src/dart2jslib.dart' show
-    MessageKind,
-    MessageTemplate;
+import 'package:compiler/src/elements/elements.dart' show LibraryElement;
 
-import 'package:compiler/src/null_compiler_output.dart' show
-    NullCompilerOutput;
+import 'package:compiler/src/null_compiler_output.dart' show NullCompilerOutput;
 
 import 'package:compiler/src/old_to_new_api.dart'
     show LegacyCompilerDiagnostics, LegacyCompilerInput;
@@ -33,8 +30,7 @@ Uri sdkRoot = Uri.base.resolve("sdk/");
 Uri mock1LibraryUri = sdkRoot.resolve("lib/mock1.dart");
 Uri mock2LibraryUri = sdkRoot.resolve("lib/mock2.dart");
 
-class CustomCompiler extends Compiler {
-
+class CustomCompiler extends CompilerImpl {
   CustomCompiler(provider, handler, libraryRoot,
       packageRoot, options, environment)
       : super(provider, const NullCompilerOutput(), handler, libraryRoot,
@@ -81,7 +77,7 @@ main() async {
     Expect.equals(1, actualMessageCount);
   }
 
-  Compiler compiler = new CustomCompiler(
+  CompilerImpl compiler = new CustomCompiler(
       new LegacyCompilerInput(wrappedProvider),
       new LegacyCompilerDiagnostics(wrappedHandler),
       sdkRoot,

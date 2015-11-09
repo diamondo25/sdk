@@ -3,7 +3,10 @@
 // BSD-style license that can be found in the LICENSE file.
 
 #include "bin/dartutils.h"
+#include "bin/dbg_connection.h"
+#include "bin/eventhandler.h"
 #include "bin/io_buffer.h"
+#include "bin/log.h"
 #include "bin/platform.h"
 #include "bin/process.h"
 #include "bin/socket.h"
@@ -34,9 +37,15 @@ static char** ExtractCStringList(Dart_Handle strings,
   // Protect against user-defined list implementations that can have
   // arbitrary length.
   if (len < 0 || len > kMaxArgumentListLength) {
-    DartUtils::SetIntegerField(status_handle, "_errorCode", 0);
-    DartUtils::SetStringField(
+    result = DartUtils::SetIntegerField(status_handle, "_errorCode", 0);
+    if (Dart_IsError(result)) {
+      Dart_PropagateError(result);
+    }
+    result = DartUtils::SetStringField(
         status_handle, "_errorMessage", "Max argument list length exceeded");
+    if (Dart_IsError(result)) {
+      Dart_PropagateError(result);
+    }
     return NULL;
   }
   *length = len;
@@ -48,9 +57,15 @@ static char** ExtractCStringList(Dart_Handle strings,
       Dart_PropagateError(arg);
     }
     if (!Dart_IsString(arg)) {
-      DartUtils::SetIntegerField(status_handle, "_errorCode", 0);
-      DartUtils::SetStringField(
+      result = DartUtils::SetIntegerField(status_handle, "_errorCode", 0);
+      if (Dart_IsError(result)) {
+        Dart_PropagateError(result);
+      }
+      result = DartUtils::SetStringField(
           status_handle, "_errorMessage", error_msg);
+      if (Dart_IsError(result)) {
+        Dart_PropagateError(result);
+      }
       delete[] string_args;
       return NULL;
     }
@@ -65,15 +80,22 @@ void FUNCTION_NAME(Process_Start)(Dart_NativeArguments args) {
   intptr_t process_stdout;
   intptr_t process_stderr;
   intptr_t exit_event;
+  Dart_Handle result;
   Dart_Handle status_handle = Dart_GetNativeArgument(args, 10);
   Dart_Handle path_handle = Dart_GetNativeArgument(args, 1);
   // The Dart code verifies that the path implements the String
   // interface. However, only builtin Strings are handled by
   // GetStringValue.
   if (!Dart_IsString(path_handle)) {
-    DartUtils::SetIntegerField(status_handle, "_errorCode", 0);
-    DartUtils::SetStringField(
+    result = DartUtils::SetIntegerField(status_handle, "_errorCode", 0);
+    if (Dart_IsError(result)) {
+      Dart_PropagateError(result);
+    }
+    result = DartUtils::SetStringField(
         status_handle, "_errorMessage", "Path must be a builtin string");
+    if (Dart_IsError(result)) {
+      Dart_PropagateError(result);
+    }
     Dart_SetReturnValue(args, Dart_NewBoolean(false));
     return;
   }
@@ -96,10 +118,16 @@ void FUNCTION_NAME(Process_Start)(Dart_NativeArguments args) {
     working_directory = DartUtils::GetStringValue(working_directory_handle);
   } else if (!Dart_IsNull(working_directory_handle)) {
     delete[] string_args;
-    DartUtils::SetIntegerField(status_handle, "_errorCode", 0);
-    DartUtils::SetStringField(
+    result = DartUtils::SetIntegerField(status_handle, "_errorCode", 0);
+    if (Dart_IsError(result)) {
+      Dart_PropagateError(result);
+    }
+    result = DartUtils::SetStringField(
         status_handle, "_errorMessage",
         "WorkingDirectory must be a builtin string");
+    if (Dart_IsError(result)) {
+      Dart_PropagateError(result);
+    }
     Dart_SetReturnValue(args, Dart_NewBoolean(false));
     return;
   }
@@ -151,13 +179,19 @@ void FUNCTION_NAME(Process_Start)(Dart_NativeArguments args) {
     }
     Process::SetProcessIdNativeField(process, pid);
   } else {
-    DartUtils::SetIntegerField(
+    result = DartUtils::SetIntegerField(
         status_handle, "_errorCode", error_code);
-    DartUtils::SetStringField(
+    if (Dart_IsError(result)) {
+      Dart_PropagateError(result);
+    }
+    result = DartUtils::SetStringField(
         status_handle,
         "_errorMessage",
         os_error_message != NULL ? os_error_message
                                  : "Cannot get error message");
+    if (Dart_IsError(result)) {
+      Dart_PropagateError(result);
+    }
   }
   delete[] string_args;
   delete[] string_environment;
@@ -217,8 +251,7 @@ void FUNCTION_NAME(Process_Exit)(Dart_NativeArguments args) {
   // Ignore result if passing invalid argument and just exit 0.
   DartUtils::GetInt64Value(Dart_GetNativeArgument(args, 0), &status);
   Dart_ExitIsolate();
-  Dart_Cleanup();
-  exit(static_cast<int>(status));
+  Platform::Exit(static_cast<int>(status));
 }
 
 

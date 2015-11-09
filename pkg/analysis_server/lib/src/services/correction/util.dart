@@ -6,7 +6,7 @@ library services.src.correction.util;
 
 import 'dart:math';
 
-import 'package:analysis_server/src/protocol.dart'
+import 'package:analysis_server/plugin/protocol/protocol.dart'
     show SourceChange, SourceEdit;
 import 'package:analysis_server/src/protocol_server.dart'
     show doSourceChange_addElementEdit;
@@ -78,7 +78,7 @@ bool allListsIdentical(List<List> lists, int position) {
 }
 
 /**
- * Climbs up [PrefixedIdentifier] and [ProperyAccess] nodes that include [node].
+ * Climbs up [PrefixedIdentifier] and [PropertyAccess] nodes that include [node].
  */
 Expression climbPropertyAccess(AstNode node) {
   while (true) {
@@ -143,6 +143,18 @@ List<SourceRange> getCommentRanges(CompilationUnit unit) {
   return ranges;
 }
 
+/**
+ * Return the given [element] if it is a [CompilationUnitElement].
+ * Return the enclosing [CompilationUnitElement] of the given [element],
+ * maybe `null`.
+ */
+CompilationUnitElement getCompilationUnitElement(Element element) {
+  if (element is CompilationUnitElement) {
+    return element;
+  }
+  return element.getAncestor((e) => e is CompilationUnitElement);
+}
+
 String getDefaultValueCode(DartType type) {
   if (type != null) {
     String typeName = type.displayName;
@@ -175,7 +187,9 @@ String getElementKindName(Element element) {
  */
 String getElementQualifiedName(Element element) {
   ElementKind kind = element.kind;
-  if (kind == ElementKind.FIELD || kind == ElementKind.METHOD) {
+  if (kind == ElementKind.CONSTRUCTOR ||
+      kind == ElementKind.FIELD ||
+      kind == ElementKind.METHOD) {
     return '${element.enclosingElement.displayName}.${element.displayName}';
   } else {
     return element.displayName;
@@ -439,8 +453,7 @@ List<AstNode> getParents(AstNode node) {
  * The resulting AST structure may or may not be resolved.
  */
 AstNode getParsedClassElementNode(ClassElement classElement) {
-  CompilationUnitElement unitElement =
-      classElement.getAncestor((e) => e is CompilationUnitElement);
+  CompilationUnitElement unitElement = getCompilationUnitElement(classElement);
   CompilationUnit unit = getParsedUnit(unitElement);
   int offset = classElement.nameOffset;
   AstNode classNameNode = new NodeLocator(offset).searchWithin(unit);
@@ -1222,30 +1235,6 @@ class CorrectionUtils {
   }
 
   /**
-   * @return <code>true</code> if given range of [BinaryExpression] can be extracted.
-   */
-  bool validateBinaryExpressionRange(
-      BinaryExpression binaryExpression, SourceRange range) {
-    // only parts of associative expression are safe to extract
-    if (!binaryExpression.operator.type.isAssociativeOperator) {
-      return false;
-    }
-    // prepare selected operands
-    List<Expression> operands = _getOperandsInOrderFor(binaryExpression);
-    List<Expression> subOperands = _getOperandsForSourceRange(operands, range);
-    // if empty, then something wrong with selection
-    if (subOperands.isEmpty) {
-      return false;
-    }
-    // may be some punctuation included into selection - operators, braces, etc
-    if (_selectionIncludesNonWhitespaceOutsideOperands(range, subOperands)) {
-      return false;
-    }
-    // OK
-    return true;
-  }
-
-  /**
    * @return the [ImportElement] used to import given [Element] into [library].
    *         May be `null` if was not imported, i.e. declared in the same library.
    */
@@ -1331,11 +1320,12 @@ class CorrectionUtils {
     }
     if (expression is ParenthesizedExpression) {
       ParenthesizedExpression pe = expression;
-      Expression innerExpresion = pe.expression;
-      while (innerExpresion is ParenthesizedExpression) {
-        innerExpresion = (innerExpresion as ParenthesizedExpression).expression;
+      Expression innerExpression = pe.expression;
+      while (innerExpression is ParenthesizedExpression) {
+        innerExpression =
+            (innerExpression as ParenthesizedExpression).expression;
       }
-      return _invertCondition0(innerExpresion);
+      return _invertCondition0(innerExpression);
     }
     DartType type = expression.bestType;
     if (type.displayName == "bool") {
@@ -1354,12 +1344,6 @@ class CorrectionUtils {
       return identical(parameterClassElement, targetClassElement);
     }
     return true;
-  }
-
-  bool _selectionIncludesNonWhitespaceOutsideOperands(
-      SourceRange selection, List<Expression> operands) {
-    return _selectionIncludesNonWhitespaceOutsideRange(
-        selection, rangeNodes(operands));
   }
 
   /**
@@ -1382,66 +1366,6 @@ class CorrectionUtils {
     }
     // only whitespace in selection around range
     return false;
-  }
-
-  /**
-   * @return [Expression]s from <code>operands</code> which are completely covered by given
-   *         [SourceRange]. Range should start and end between given [Expression]s.
-   */
-  static List<Expression> _getOperandsForSourceRange(
-      List<Expression> operands, SourceRange range) {
-    assert(!operands.isEmpty);
-    List<Expression> subOperands = [];
-    // track range enter/exit
-    bool entered = false;
-    bool exited = false;
-    // may be range starts before or on first operand
-    if (range.offset <= operands[0].offset) {
-      entered = true;
-    }
-    // iterate over gaps between operands
-    for (int i = 0; i < operands.length - 1; i++) {
-      Expression operand = operands[i];
-      Expression nextOperand = operands[i + 1];
-      SourceRange inclusiveGap =
-          rangeEndStart(operand, nextOperand).getMoveEnd(1);
-      // add operand, if already entered range
-      if (entered) {
-        subOperands.add(operand);
-        // may be last operand in range
-        if (range.endsIn(inclusiveGap)) {
-          exited = true;
-        }
-      } else {
-        // may be first operand in range
-        if (range.startsIn(inclusiveGap)) {
-          entered = true;
-        }
-      }
-    }
-    // check if last operand is in range
-    Expression lastGroupMember = operands[operands.length - 1];
-    if (range.end == lastGroupMember.end) {
-      subOperands.add(lastGroupMember);
-      exited = true;
-    }
-    // we expect that range covers only given operands
-    if (!exited) {
-      return [];
-    }
-    // done
-    return subOperands;
-  }
-
-  /**
-   * @return all operands of the given [BinaryExpression] and its children with the same
-   *         operator.
-   */
-  static List<Expression> _getOperandsInOrderFor(BinaryExpression groupRoot) {
-    List<Expression> operands = [];
-    TokenType groupOperatorType = groupRoot.operator.type;
-    groupRoot.accept(new _OrderedOperandsVisitor(groupOperatorType, operands));
-    return operands;
   }
 }
 
@@ -1534,7 +1458,7 @@ class _InvertedCondition {
 
   static _InvertedCondition _binary2(
       _InvertedCondition left, String operation, _InvertedCondition right) {
-    // TODO(scheglov) conside merging with "_binary()" after testing
+    // TODO(scheglov) consider merging with "_binary()" after testing
     return new _InvertedCondition(
         1 << 20, "${left._source}${operation}${right._source}");
   }
@@ -1553,20 +1477,4 @@ class _InvertedCondition {
 
   static _InvertedCondition _simple(String source) =>
       new _InvertedCondition(2147483647, source);
-}
-
-class _OrderedOperandsVisitor extends GeneralizingAstVisitor {
-  final TokenType groupOperatorType;
-  final List<Expression> operands;
-
-  _OrderedOperandsVisitor(this.groupOperatorType, this.operands);
-
-  @override
-  Object visitExpression(Expression node) {
-    if (node is BinaryExpression && node.operator.type == groupOperatorType) {
-      return super.visitNode(node);
-    }
-    operands.add(node);
-    return null;
-  }
 }

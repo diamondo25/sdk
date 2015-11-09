@@ -32,6 +32,7 @@ class ObjectStore {
     kMirrors,
     kProfiler,
     kTypedData,
+    kVMService,
   };
 
   ~ObjectStore();
@@ -265,6 +266,7 @@ class ObjectStore {
   RawLibrary* mirrors_library() const { return mirrors_library_; }
   RawLibrary* profiler_library() const { return profiler_library_; }
   RawLibrary* typed_data_library() const { return typed_data_library_; }
+  RawLibrary* vmservice_library() const { return vmservice_library_; }
 
   void set_bootstrap_library(BootstrapLibraryId index, const Library& value) {
     switch (index) {
@@ -301,6 +303,9 @@ class ObjectStore {
       case kTypedData:
         typed_data_library_ = value.raw();
         break;
+      case kVMService:
+        vmservice_library_ = value.raw();
+        break;
       default:
         UNREACHABLE();
     }
@@ -331,10 +336,6 @@ class ObjectStore {
   void set_pending_classes(const GrowableObjectArray& value) {
     ASSERT(!value.IsNull());
     pending_classes_ = value.raw();
-  }
-
-  RawGrowableObjectArray* pending_functions() const {
-    return pending_functions_;
   }
 
   RawGrowableObjectArray* pending_deferred_loads() const {
@@ -426,6 +427,45 @@ class ObjectStore {
     return OFFSET_OF(ObjectStore, library_load_error_table_);
   }
 
+  RawArray* compile_time_constants() const {
+    return compile_time_constants_;
+  }
+  void set_compile_time_constants(const Array& value) {
+    compile_time_constants_ = value.raw();
+  }
+
+  RawGrowableObjectArray* token_objects() const {
+    return token_objects_;
+  }
+  void set_token_objects(const GrowableObjectArray& value) {
+    token_objects_ = value.raw();
+  }
+
+  RawArray* token_objects_map() const {
+    return token_objects_map_;
+  }
+  void set_token_objects_map(const Array& value) {
+    token_objects_map_ = value.raw();
+  }
+
+  RawGrowableObjectArray* megamorphic_cache_table() const {
+    return megamorphic_cache_table_;
+  }
+  void set_megamorphic_cache_table(const GrowableObjectArray& value) {
+    megamorphic_cache_table_ = value.raw();
+  }
+  RawCode* megamorphic_miss_code() const {
+    return megamorphic_miss_code_;
+  }
+  RawFunction* megamorphic_miss_function() const {
+    return megamorphic_miss_function_;
+  }
+  void SetMegamorphicMissHandler(const Code& code, const Function& func) {
+    // Hold onto the code so it is traced and not detached from the function.
+    megamorphic_miss_code_ = code.raw();
+    megamorphic_miss_function_ = func.raw();
+  }
+
   // Visit all object pointers.
   void VisitObjectPointers(ObjectPointerVisitor* visitor);
 
@@ -498,9 +538,9 @@ class ObjectStore {
   RawLibrary* profiler_library_;
   RawLibrary* root_library_;
   RawLibrary* typed_data_library_;
+  RawLibrary* vmservice_library_;
   RawGrowableObjectArray* libraries_;
   RawGrowableObjectArray* pending_classes_;
-  RawGrowableObjectArray* pending_functions_;
   RawGrowableObjectArray* pending_deferred_loads_;
   RawGrowableObjectArray* resume_capabilities_;
   RawGrowableObjectArray* exit_listeners_;
@@ -515,10 +555,20 @@ class ObjectStore {
   RawTypedData* empty_uint32_array_;
   RawFunction* handle_message_function_;
   RawArray* library_load_error_table_;
+  RawArray* compile_time_constants_;
+  RawObject** to_snapshot() {
+    return reinterpret_cast<RawObject**>(&compile_time_constants_);
+  }
+  RawGrowableObjectArray* token_objects_;
+  RawArray* token_objects_map_;
+  RawGrowableObjectArray* megamorphic_cache_table_;
+  RawCode* megamorphic_miss_code_;
+  RawFunction* megamorphic_miss_function_;
   RawObject** to() {
-    return reinterpret_cast<RawObject**>(&library_load_error_table_);
+    return reinterpret_cast<RawObject**>(&megamorphic_miss_function_);
   }
 
+  friend class FullSnapshotWriter;
   friend class SnapshotReader;
   friend class VmIsolateSnapshotReader;
 

@@ -9,9 +9,12 @@
 #include "vm/dart_api_impl.h"
 #include "vm/object.h"
 #include "vm/symbols.h"
+#include "vm/thread_pool.h"
 #include "vm/unit_test.h"
 
 namespace dart {
+
+DECLARE_FLAG(bool, background_compilation);
 
 TEST_CASE(CompileScript) {
   const char* kScriptChars =
@@ -69,6 +72,46 @@ TEST_CASE(CompileFunction) {
 }
 
 
+TEST_CASE(CompileFunctionOnHelperThread) {
+  // Create a simple function and compile it without optimization.
+  const char* kScriptChars =
+            "class A {\n"
+            "  static foo() { return 42; }\n"
+            "}\n";
+  String& url =
+      String::Handle(String::New("dart-test:CompileFunctionOnHelperThread"));
+  String& source = String::Handle(String::New(kScriptChars));
+  Script& script = Script::Handle(Script::New(url,
+                                              source,
+                                              RawScript::kScriptTag));
+  Library& lib = Library::Handle(Library::CoreLibrary());
+  EXPECT(CompilerTest::TestCompileScript(lib, script));
+  EXPECT(ClassFinalizer::ProcessPendingClasses());
+  Class& cls = Class::Handle(
+      lib.LookupClass(String::Handle(Symbols::New("A"))));
+  EXPECT(!cls.IsNull());
+  String& function_foo_name = String::Handle(String::New("foo"));
+  Function& func =
+      Function::Handle(cls.LookupStaticFunction(function_foo_name));
+  EXPECT(!func.HasCode());
+  CompilerTest::TestCompileFunction(func);
+  EXPECT(func.HasCode());
+  EXPECT(!func.HasOptimizedCode());
+  FLAG_background_compilation = true;
+  BackgroundCompiler::EnsureInit(thread);
+  Isolate* isolate = thread->isolate();
+  ASSERT(isolate->background_compiler() != NULL);
+  isolate->background_compiler()->CompileOptimized(func);
+  Monitor* m = new Monitor();
+  MonitorLocker ml(m);
+  while (!func.HasOptimizedCode()) {
+    isolate->background_compiler()->InstallGeneratedCode();
+    ml.Wait(1);
+  }
+  BackgroundCompiler::Stop(isolate->background_compiler());
+}
+
+
 TEST_CASE(RegenerateAllocStubs) {
   const char* kScriptChars =
             "class A {\n"
@@ -89,8 +132,8 @@ TEST_CASE(RegenerateAllocStubs) {
       lib_handle.LookupClass(String::Handle(Symbols::New("A"))));
   EXPECT(!cls.IsNull());
 
-  Isolate* isolate = Isolate::Current();
-  const Code& stub = Code::Handle(isolate,
+  Zone* zone = thread->zone();
+  const Code& stub = Code::Handle(zone,
                                   StubCode::GetAllocationStubForClass(cls));
   Class& owner = Class::Handle();
   owner ^= stub.owner();

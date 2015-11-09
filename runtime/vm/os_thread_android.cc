@@ -101,9 +101,6 @@ int OSThread::Start(ThreadStartFunction function, uword parameter) {
   int result = pthread_attr_init(&attr);
   RETURN_ON_PTHREAD_FAILURE(result);
 
-  result = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-  RETURN_ON_PTHREAD_FAILURE(result);
-
   result = pthread_attr_setstacksize(&attr, OSThread::GetMaxStackSize());
   RETURN_ON_PTHREAD_FAILURE(result);
 
@@ -123,6 +120,7 @@ int OSThread::Start(ThreadStartFunction function, uword parameter) {
 ThreadLocalKey OSThread::kUnsetThreadLocalKey =
     static_cast<pthread_key_t>(-1);
 ThreadId OSThread::kInvalidThreadId = static_cast<ThreadId>(0);
+ThreadJoinId OSThread::kInvalidThreadJoinId = static_cast<ThreadJoinId>(0);
 
 ThreadLocalKey OSThread::CreateThreadLocal(ThreadDestructor destructor) {
   pthread_key_t key = kUnsetThreadLocalKey;
@@ -158,14 +156,30 @@ ThreadId OSThread::GetCurrentThreadId() {
 }
 
 
-bool OSThread::Join(ThreadId id) {
-  return false;
+ThreadId OSThread::GetCurrentThreadTraceId() {
+  return GetCurrentThreadId();
+}
+
+
+ThreadJoinId OSThread::GetCurrentThreadJoinId() {
+  return pthread_self();
+}
+
+
+void OSThread::Join(ThreadJoinId id) {
+  int result = pthread_join(id, NULL);
+  ASSERT(result == 0);
 }
 
 
 intptr_t OSThread::ThreadIdToIntPtr(ThreadId id) {
   ASSERT(sizeof(id) == sizeof(intptr_t));
   return static_cast<intptr_t>(id);
+}
+
+
+ThreadId OSThread::ThreadIdFromIntPtr(intptr_t id) {
+  return static_cast<ThreadId>(id);
 }
 
 
@@ -202,8 +216,8 @@ Mutex::Mutex() {
   result = pthread_mutexattr_destroy(&attr);
   VALIDATE_PTHREAD_RESULT(result);
 
-  // When running with assertions enabled we do track the owner.
 #if defined(DEBUG)
+  // When running with assertions enabled we do track the owner.
   owner_ = OSThread::kInvalidThreadId;
 #endif  // defined(DEBUG)
 }
@@ -214,8 +228,8 @@ Mutex::~Mutex() {
   // Verify that the pthread_mutex was destroyed.
   VALIDATE_PTHREAD_RESULT(result);
 
-  // When running with assertions enabled we do track the owner.
 #if defined(DEBUG)
+  // When running with assertions enabled we do track the owner.
   ASSERT(owner_ == OSThread::kInvalidThreadId);
 #endif  // defined(DEBUG)
 }
@@ -226,8 +240,8 @@ void Mutex::Lock() {
   // Specifically check for dead lock to help debugging.
   ASSERT(result != EDEADLK);
   ASSERT_PTHREAD_SUCCESS(result);  // Verify no other errors.
-  // When running with assertions enabled we do track the owner.
 #if defined(DEBUG)
+  // When running with assertions enabled we do track the owner.
   owner_ = OSThread::GetCurrentThreadId();
 #endif  // defined(DEBUG)
 }
@@ -240,8 +254,8 @@ bool Mutex::TryLock() {
     return false;
   }
   ASSERT_PTHREAD_SUCCESS(result);  // Verify no other errors.
-  // When running with assertions enabled we do track the owner.
 #if defined(DEBUG)
+  // When running with assertions enabled we do track the owner.
   owner_ = OSThread::GetCurrentThreadId();
 #endif  // defined(DEBUG)
   return true;
@@ -249,8 +263,8 @@ bool Mutex::TryLock() {
 
 
 void Mutex::Unlock() {
-  // When running with assertions enabled we do track the owner.
 #if defined(DEBUG)
+  // When running with assertions enabled we do track the owner.
   ASSERT(IsOwnedByCurrentThread());
   owner_ = OSThread::kInvalidThreadId;
 #endif  // defined(DEBUG)
@@ -286,10 +300,20 @@ Monitor::Monitor() {
 
   result = pthread_condattr_destroy(&cond_attr);
   VALIDATE_PTHREAD_RESULT(result);
+
+#if defined(DEBUG)
+  // When running with assertions enabled we track the owner.
+  owner_ = OSThread::kInvalidThreadId;
+#endif  // defined(DEBUG)
 }
 
 
 Monitor::~Monitor() {
+#if defined(DEBUG)
+  // When running with assertions enabled we track the owner.
+  ASSERT(owner_ == OSThread::kInvalidThreadId);
+#endif  // defined(DEBUG)
+
   int result = pthread_mutex_destroy(data_.mutex());
   VALIDATE_PTHREAD_RESULT(result);
 
@@ -301,12 +325,22 @@ Monitor::~Monitor() {
 void Monitor::Enter() {
   int result = pthread_mutex_lock(data_.mutex());
   VALIDATE_PTHREAD_RESULT(result);
-  // TODO(iposva): Do we need to track lock owners?
+
+#if defined(DEBUG)
+  // When running with assertions enabled we track the owner.
+  ASSERT(owner_ == OSThread::kInvalidThreadId);
+  owner_ = OSThread::GetCurrentThreadId();
+#endif  // defined(DEBUG)
 }
 
 
 void Monitor::Exit() {
-  // TODO(iposva): Do we need to track lock owners?
+#if defined(DEBUG)
+  // When running with assertions enabled we track the owner.
+  ASSERT(IsOwnedByCurrentThread());
+  owner_ = OSThread::kInvalidThreadId;
+#endif  // defined(DEBUG)
+
   int result = pthread_mutex_unlock(data_.mutex());
   VALIDATE_PTHREAD_RESULT(result);
 }
@@ -318,7 +352,13 @@ Monitor::WaitResult Monitor::Wait(int64_t millis) {
 
 
 Monitor::WaitResult Monitor::WaitMicros(int64_t micros) {
-  // TODO(iposva): Do we need to track lock owners?
+#if defined(DEBUG)
+  // When running with assertions enabled we track the owner.
+  ASSERT(IsOwnedByCurrentThread());
+  ThreadId saved_owner = owner_;
+  owner_ = OSThread::kInvalidThreadId;
+#endif  // defined(DEBUG)
+
   Monitor::WaitResult retval = kNotified;
   if (micros == kNoTimeout) {
     // Wait forever.
@@ -333,19 +373,28 @@ Monitor::WaitResult Monitor::WaitMicros(int64_t micros) {
       retval = kTimedOut;
     }
   }
+
+#if defined(DEBUG)
+  // When running with assertions enabled we track the owner.
+  ASSERT(owner_ == OSThread::kInvalidThreadId);
+  owner_ = OSThread::GetCurrentThreadId();
+  ASSERT(owner_ == saved_owner);
+#endif  // defined(DEBUG)
   return retval;
 }
 
 
 void Monitor::Notify() {
-  // TODO(iposva): Do we need to track lock owners?
+  // When running with assertions enabled we track the owner.
+  ASSERT(IsOwnedByCurrentThread());
   int result = pthread_cond_signal(data_.cond());
   VALIDATE_PTHREAD_RESULT(result);
 }
 
 
 void Monitor::NotifyAll() {
-  // TODO(iposva): Do we need to track lock owners?
+  // When running with assertions enabled we track the owner.
+  ASSERT(IsOwnedByCurrentThread());
   int result = pthread_cond_broadcast(data_.cond());
   VALIDATE_PTHREAD_RESULT(result);
 }

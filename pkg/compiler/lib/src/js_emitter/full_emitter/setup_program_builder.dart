@@ -127,14 +127,16 @@ jsAst.Statement buildSetupProgram(Program program, Compiler compiler,
      'finishedClassesAccess': finishedClassesAccess,
      'needsMixinSupport': emitter.needsMixinSupport,
      'needsNativeSupport': program.needsNativeSupport,
-     'isInterceptorClass': namer.operatorIs(backend.jsInterceptorClass),
-     'isObject' : namer.operatorIs(compiler.objectClass),
+     'enabledJsInterop': backend.jsInteropAnalysis.enabledJsInterop,
+     'jsInteropBoostrap':backend.jsInteropAnalysis.buildJsInteropBootstrap(),
+     'isInterceptorClass': namer.operatorIs(backend.helpers.jsInterceptorClass),
+     'isObject' : namer.operatorIs(compiler.coreClasses.objectClass),
      'specProperty': js.string(namer.nativeSpecProperty),
      'trivialNsmHandlers': emitter.buildTrivialNsmHandlers(),
      'hasRetainedMetadata': backend.hasRetainedMetadata,
      'types': typesAccess,
      'objectClassName': js.quoteName(
-         namer.runtimeTypeName(compiler.objectClass)),
+         namer.runtimeTypeName(compiler.coreClasses.objectClass)),
      'needsStructuredMemberInfo': emitter.needsStructuredMemberInfo,
      'usesMangledNames':
           compiler.mirrorsLibrary != null || compiler.enabledFunctionApply,
@@ -142,7 +144,6 @@ jsAst.Statement buildSetupProgram(Program program, Compiler compiler,
      'nativeInfoHandler': nativeInfoHandler,
      'operatorIsPrefix' : js.string(namer.operatorIsPrefix),
      'deferredActionString': js.string(namer.deferredAction)};
-
    String skeleton = '''
 function $setupProgramName(programData, typesOffset) {
   "use strict";
@@ -754,6 +755,9 @@ function $setupProgramName(programData, typesOffset) {
       }
     }
 
+    if (#enabledJsInterop) {
+      #jsInteropBoostrap
+    }
     #tearOffCode;
   }
 

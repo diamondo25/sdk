@@ -8,7 +8,6 @@
 #include "platform/utils.h"
 #include "vm/dart_api_state.h"
 #include "vm/flags.h"
-#include "vm/isolate.h"
 #include "vm/os.h"
 #include "vm/raw_object.h"
 #include "vm/visitor.h"
@@ -109,11 +108,6 @@ HandleScope::HandleScope(Thread* thread) : StackResource(thread) {
 }
 
 
-HandleScope::HandleScope(Isolate* isolate) : StackResource(isolate) {
-  Initialize();
-}
-
-
 HandleScope::~HandleScope() {
   ASSERT(thread()->zone() != NULL);
   VMHandles* handles = thread()->zone()->handles();
@@ -130,13 +124,8 @@ HandleScope::~HandleScope() {
 
 
 #if defined(DEBUG)
-NoHandleScope::NoHandleScope(Isolate* isolate) : StackResource(isolate) {
-  thread()->IncrementNoHandleScopeDepth();
-}
-
-
-NoHandleScope::NoHandleScope() : StackResource(Thread::Current()) {
-  thread()->IncrementNoHandleScopeDepth();
+NoHandleScope::NoHandleScope(Thread* thread) : StackResource(thread) {
+  thread->IncrementNoHandleScopeDepth();
 }
 
 

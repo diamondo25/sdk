@@ -15,9 +15,14 @@
 #include <sys/time.h>  // NOLINT
 #include <sys/resource.h>  // NOLINT
 #include <unistd.h>  // NOLINT
+#if TARGET_OS_IOS
+#include <sys/sysctl.h>  // NOLINT
+#include <syslog.h>  // NOLINT
+#endif
 
 #include "platform/utils.h"
 #include "vm/isolate.h"
+#include "vm/zone.h"
 
 namespace dart {
 
@@ -81,6 +86,43 @@ int64_t OS::GetCurrentTimeMicros() {
 }
 
 
+int64_t OS::GetCurrentTraceMicros() {
+#if TARGET_OS_IOS
+  // On iOS mach_absolute_time stops while the device is sleeping. Instead use
+  // now - KERN_BOOTTIME to get a time difference that is not impacted by clock
+  // changes. KERN_BOOTTIME will be updated by the system whenever the system
+  // clock change.
+  struct timeval boottime;
+  int mib[2] = {CTL_KERN, KERN_BOOTTIME};
+  size_t size = sizeof(boottime);
+  int kr = sysctl(mib, sizeof(mib) / sizeof(mib[0]), &boottime, &size, NULL, 0);
+  ASSERT(KERN_SUCCESS == kr);
+  int64_t now = GetCurrentTimeMicros();
+  int64_t origin = boottime.tv_sec * kMicrosecondsPerSecond;
+  origin += boottime.tv_usec;
+  return now - origin;
+#else
+  static mach_timebase_info_data_t timebase_info;
+  if (timebase_info.denom == 0) {
+    // Zero-initialization of statics guarantees that denom will be 0 before
+    // calling mach_timebase_info.  mach_timebase_info will never set denom to
+    // 0 as that would be invalid, so the zero-check can be used to determine
+    // whether mach_timebase_info has already been called.  This is
+    // recommended by Apple's QA1398.
+    kern_return_t kr = mach_timebase_info(&timebase_info);
+    ASSERT(KERN_SUCCESS == kr);
+  }
+
+  // timebase_info converts absolute time tick units into nanoseconds.  Convert
+  // to microseconds.
+  int64_t result = mach_absolute_time() / kNanosecondsPerMicrosecond;
+  result *= timebase_info.numer;
+  result /= timebase_info.denom;
+  return result;
+#endif  // TARGET_OS_IOS
+}
+
+
 void* OS::AlignedAllocate(intptr_t size, intptr_t alignment) {
   const int kMinimumAlignment = 16;
   ASSERT(Utils::IsPowerOfTwo(alignment));
@@ -100,9 +142,25 @@ void OS::AlignedFree(void* ptr) {
 
 
 intptr_t OS::ActivationFrameAlignment() {
+#if TARGET_OS_IOS
+#if TARGET_ARCH_ARM
+  // Even if we generate code that maintains a stronger alignment, we cannot
+  // assert the stronger stack alignment because C++ code will not maintain it.
+  return 8;
+#elif TARGET_ARCH_ARM64
+  return 16;
+#elif TARGET_ARCH_IA32
+  return 16;  // iOS simulator
+#elif TARGET_ARCH_X64
+  return 16;  // iOS simulator
+#else
+#error Unimplemented
+#endif
+#else  // TARGET_OS_IOS
   // OS X activation frames must be 16 byte-aligned; see "Mac OS X ABI
   // Function Call Guide".
   return 16;
+#endif  // TARGET_OS_IOS
 }
 
 
@@ -183,10 +241,17 @@ char* OS::StrNDup(const char* s, intptr_t n) {
 
 
 void OS::Print(const char* format, ...) {
+#if TARGET_OS_IOS
+  va_list args;
+  va_start(args, format);
+  vsyslog(LOG_INFO, format, args);
+  va_end(args);
+#else
   va_list args;
   va_start(args, format);
   VFPrint(stdout, format, args);
   va_end(args);
+#endif
 }
 
 
@@ -214,6 +279,39 @@ int OS::VSNPrint(char* str, size_t size, const char* format, va_list args) {
 }
 
 
+char* OS::SCreate(Zone* zone, const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  char* buffer = VSCreate(zone, format, args);
+  va_end(args);
+  return buffer;
+}
+
+
+char* OS::VSCreate(Zone* zone, const char* format, va_list args) {
+  // Measure.
+  va_list measure_args;
+  va_copy(measure_args, args);
+  intptr_t len = VSNPrint(NULL, 0, format, measure_args);
+  va_end(measure_args);
+
+  char* buffer;
+  if (zone) {
+    buffer = zone->Alloc<char>(len + 1);
+  } else {
+    buffer = reinterpret_cast<char*>(malloc(len + 1));
+  }
+  ASSERT(buffer != NULL);
+
+  // Print.
+  va_list print_args;
+  va_copy(print_args, args);
+  VSNPrint(buffer, len + 1, format, print_args);
+  va_end(print_args);
+  return buffer;
+}
+
+
 bool OS::StringToInt64(const char* str, int64_t* value) {
   ASSERT(str != NULL && strlen(str) > 0 && value != NULL);
   int32_t base = 10;
@@ -238,10 +336,17 @@ void OS::RegisterCodeObservers() {
 
 
 void OS::PrintErr(const char* format, ...) {
+#if TARGET_OS_IOS
+  va_list args;
+  va_start(args, format);
+  vsyslog(LOG_ERR, format, args);
+  va_end(args);
+#else
   va_list args;
   va_start(args, format);
   VFPrint(stderr, format, args);
   va_end(args);
+#endif
 }
 
 

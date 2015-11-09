@@ -3,20 +3,21 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import "package:expect/expect.dart";
-import "package:compiler/src/scanner/scannerlib.dart";
+import "package:compiler/src/parser/element_listener.dart";
+import "package:compiler/src/parser/node_listener.dart";
+import "package:compiler/src/parser/parser.dart";
+import "package:compiler/src/scanner/string_scanner.dart";
+import "package:compiler/src/tokens/token.dart";
 import "package:compiler/src/tree/tree.dart";
 
-import "package:compiler/src/dart2jslib.dart"
-    show DiagnosticListener,
-         Script;
-
+import "package:compiler/src/diagnostics/diagnostic_listener.dart";
 import "package:compiler/src/elements/elements.dart"
     show CompilationUnitElement,
          LibraryElement;
-
 import "package:compiler/src/elements/modelx.dart"
     show CompilationUnitElementX,
          LibraryElementX;
+import "package:compiler/src/script.dart";
 
 main() {
   testClassDef();
@@ -91,7 +92,8 @@ String doUnparse(String source) {
   CompilationUnitElement element = new CompilationUnitElementX(script, lib);
   StringScanner scanner = new StringScanner.fromString(source);
   Token beginToken = scanner.tokenize();
-  NodeListener listener = new NodeListener(diagnosticListener, element);
+  NodeListener listener = new NodeListener(
+      const ScannerOptions(), diagnosticListener, element);
   Parser parser = new Parser(listener);
   parser.parseUnit(beginToken);
   Node node = listener.popNode();
@@ -99,7 +101,7 @@ String doUnparse(String source) {
   return unparse(node);
 }
 
-class MessageCollector implements DiagnosticListener {
+class MessageCollector extends DiagnosticReporter {
   List<String> messages;
   MessageCollector() {
     messages = [];

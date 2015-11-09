@@ -5,11 +5,10 @@
 // Test that resolution does not resolve things we know will not be
 // needed by the backend.
 
+import 'package:async_helper/async_helper.dart';
 import 'package:expect/expect.dart';
-import "package:async_helper/async_helper.dart";
-import 'compiler_helper.dart';
-import 'parser_helper.dart';
 import 'package:compiler/src/apiimpl.dart';
+import 'compiler_helper.dart';
 
 const String NO_RUNTIME_TYPE = r"""
 import 'dart:core' as prefix;
@@ -93,24 +92,24 @@ main() {
 }
 """;
 
-void test(String code, void check(Compiler compiler)) {
+void test(String code, void check(CompilerImpl compiler)) {
   Uri uri = new Uri(scheme: 'source');
   var compiler = compilerFor(code, uri);
-  asyncTest(() => compiler.runCompiler(uri).then((_) {
+  asyncTest(() => compiler.run(uri).then((_) {
     check(compiler);
   }));
 }
 
 void testHasRuntimeType(String code) {
   test(code, (compiler) {
-    var element = compiler.backend.findHelper('createRuntimeType');
+    var element = compiler.backend.helpers.createRuntimeType;
     Expect.isTrue(compiler.enqueuer.resolution.isProcessed(element));
   });
 }
 
 main() {
   test(NO_RUNTIME_TYPE, (compiler) {
-    var element = compiler.backend.findHelper('createRuntimeType');
+    var element = compiler.backend.helpers.createRuntimeType;
     Expect.isFalse(compiler.enqueuer.resolution.isProcessed(element));
   });
 

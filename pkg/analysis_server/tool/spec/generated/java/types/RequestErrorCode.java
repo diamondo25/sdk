@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, the Dart project authors.
+ * Copyright (c) 2015, the Dart project authors.
  *
  * Licensed under the Eclipse Public License v1.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -135,7 +135,7 @@ public class RequestErrorCode {
 
   /**
    * A request was received which the analysis server does not recognize, or cannot handle in its
-   * current configuation.
+   * current configuration.
    */
   public static final String UNKNOWN_REQUEST = "UNKNOWN_REQUEST";
 

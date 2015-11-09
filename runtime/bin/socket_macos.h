@@ -8,6 +8,5 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/socket.h>
-#include <sys/un.h>
 
 #endif  // BIN_SOCKET_MACOS_H_

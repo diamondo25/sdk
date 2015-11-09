@@ -18,7 +18,6 @@ ping_test: Skip           # Resolve test issues
 ping_pause_test: Skip     # Resolve test issues
 kill3_test: Pass, Fail    # Bad test: expects total message order
 
-message3_test/byteBuffer: Crash # Issue 21818
 message3_test/int32x4: Crash # Issue 21818
 
 [ $compiler == none && $runtime == ContentShellOnAndroid ]
@@ -45,6 +44,7 @@ spawn_uri_exported_main_test: SkipByDesign # Test uses a ".dart" URI.
 issue_21398_parent_isolate_test: SkipByDesign # Test uses a ".dart" URI.
 issue_21398_parent_isolate1_test: SkipByDesign # Test uses a ".dart" URI.
 issue_21398_parent_isolate2_test: SkipByDesign # Test uses a ".dart" URI.
+issue_24243_parent_isolate_test: SkipByDesign # Test uses a ".dart" URI.
 function_send1_test: SkipByDesign   # Test uses a ".dart" URI.
 error_exit_at_spawnuri_test: SkipByDesign  # Test uses a ".dart" URI.
 error_at_spawnuri_test: SkipByDesign  # Test uses a ".dart" URI.
@@ -93,6 +93,9 @@ nested_spawn2_test: Skip # Issue 19127: This test is timing out.
 [ $compiler == none && ($runtime == dartium || $runtime == ContentShellOnAndroid) ]
 spawn_uri_nested_vm_test: Skip # Issue 14479: This test is timing out.
 
+[ $compiler == none && $runtime == dartium && $arch == x64 ]
+isolate/spawn_uri_multi_test/01: Skip # Times out. Issue 24795
+
 [ $compiler == none && ( $runtime == dartium || $runtime == drt || $runtime == ContentShellOnAndroid) ]
 typed_message_test: Crash, Fail # Issue 13921, 14400
 message_enum_test: Fail, OK # Issue 13921 Dom isolates don't support spawnFunction
@@ -135,12 +138,31 @@ browser/typed_data_message_test: StaticWarning
 mint_maker_test: StaticWarning
 
 [ $compiler != none || $runtime != vm ]
-package_root_test: SkipByDesign # Uses dart:io.
+package_root_test: SkipByDesign  # Uses Isolate.packageRoot
+package_map_test: SkipByDesign  # Uses Isolate.packageMap
 
 [ $compiler == dart2js && $cps_ir ]
-deferred_in_isolate2_test: Crash # (lib.f()): deferred access is not implemented
+deferred_in_isolate2_test: RuntimeError # A.loadLibrary is not a function
 isolate_current_test: RuntimeError # Please triage this failure.
-message3_test/byteBuffer: RuntimeError # Please triage this failure.
-message3_test/fun: RuntimeError # Please triage this failure.
-message3_test/int32x4: RuntimeError # Please triage this failure.
-message3_test/none: RuntimeError # Please triage this failure.
+
+[ $noopt ]
+# Imports dart:mirrors
+count_test: CompileTimeError
+cross_isolate_message_test: CompileTimeError
+illegal_msg_function_test: CompileTimeError
+illegal_msg_mirror_test: CompileTimeError
+isolate_complex_messages_test: CompileTimeError
+mandel_isolate_test: CompileTimeError
+message2_test: CompileTimeError
+message_test: CompileTimeError
+mint_maker_test: CompileTimeError
+nested_spawn2_test: CompileTimeError
+nested_spawn_test: CompileTimeError
+raw_port_test: CompileTimeError
+request_reply_test: CompileTimeError
+spawn_function_custom_class_test: CompileTimeError
+spawn_function_test: CompileTimeError
+stacktrace_message_test: CompileTimeError
+stacktrace_message_test: CompileTimeError
+static_function_test: CompileTimeError
+unresolved_ports_test: CompileTimeError

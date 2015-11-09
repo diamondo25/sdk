@@ -13,10 +13,13 @@
     'snapshot_in_cc_file': 'snapshot_in.cc',
     'vm_isolate_snapshot_bin_file': '<(gen_source_dir)/vm_isolate_snapshot_gen.bin',
     'isolate_snapshot_bin_file': '<(gen_source_dir)/isolate_snapshot_gen.bin',
+    'gen_snapshot_stamp_file': '<(gen_source_dir)/gen_snapshot.stamp',
     'resources_cc_file': '<(gen_source_dir)/resources_gen.cc',
     'bootstrap_resources_cc_file':
         '<(gen_source_dir)/bootstrap_resources_gen.cc',
     'snapshot_cc_file': '<(gen_source_dir)/snapshot_gen.cc',
+    'observatory_assets_cc_file': '<(gen_source_dir)/observatory_assets.cc',
+    'observatory_assets_tar_file': '<(gen_source_dir)/observatory_assets.tar',
   },
   'targets': [
     {
@@ -198,6 +201,7 @@
         'generate_io_patch_cc_file#host',
         'generate_snapshot_file#host',
         'generate_resources_cc_file#host',
+        'generate_observatory_assets_cc_file#host',
       ],
       'sources': [
         'builtin_common.cc',
@@ -217,6 +221,7 @@
         'vmservice_impl.cc',
         'vmservice_impl.h',
         '<(resources_cc_file)',
+        '<(observatory_assets_cc_file)',
       ],
       'sources/': [
         ['exclude', '_test\\.(cc|h)$'],
@@ -224,7 +229,7 @@
       'conditions': [
         ['dart_io_support==1 and dart_io_secure_socket==1', {
           'dependencies': [
-            'bin/net/ssl.gyp:libssl_dart',
+          '../third_party/boringssl/boringssl_dart.gyp:boringssl',
           ],
         }],
         ['dart_io_secure_socket==0', {
@@ -292,14 +297,14 @@
         'io_natives.cc',
       ],
       'conditions': [
-        ['dart_io_support==1 and dart_io_secure_socket==1', {
+        ['dart_io_support==1', {
           'dependencies': [
-            'bin/net/ssl.gyp:libssl_dart',
+            'bin/zlib.gyp:zlib_dart',
           ],
         }],
-        ['dart_io_support==1 and dart_io_secure_socket==0', {
+        ['dart_io_support==1 and dart_io_secure_socket==1', {
           'dependencies': [
-            'bin/net/zlib.gyp:zlib_dart',
+            '../third_party/boringssl/boringssl_dart.gyp:boringssl',
           ],
         }],
         ['dart_io_secure_socket==0', {
@@ -333,19 +338,6 @@
           },
         }],
       ],
-      'configurations': {
-        'Dart_Android_Base': {
-          'target_conditions': [
-            ['_toolset=="target"', {
-              'defines': [
-                # Needed for sources outside of nss that include pr and ssl
-                # header files.
-                'MDCPUCFG="md/_linux.cfg"',
-              ],
-            }],
-          ],
-        },
-      },
     },
     {
       'target_name': 'libdart_nosnapshot',
@@ -382,8 +374,11 @@
       'type': 'executable',
       'toolsets':['host'],
       'dependencies': [
+        'generate_resources_cc_file#host',
+        'generate_observatory_assets_cc_file#host',
         'libdart_nosnapshot',
         'libdart_builtin',
+        'libdart_io',
       ],
       'include_dirs': [
         '..',
@@ -401,13 +396,16 @@
         'platform_macos.cc',
         'platform_win.cc',
         'platform.h',
+        'vmservice_impl.cc',
+        'vmservice_impl.h',
         # Include generated source files.
         '<(builtin_cc_file)',
         '<(io_cc_file)',
         '<(io_patch_cc_file)',
+        '<(resources_cc_file)',
       ],
       'defines': [
-        'PLATFORM_DISABLE_SOCKET'
+        'PLATFORM_DISABLE_SOCKET',
       ],
       'conditions': [
         ['OS=="win"', {
@@ -433,8 +431,7 @@
             '<(PRODUCT_DIR)/<(EXECUTABLE_PREFIX)gen_snapshot<(EXECUTABLE_SUFFIX)',
           ],
           'outputs': [
-            '<(vm_isolate_snapshot_bin_file)',
-            '<(isolate_snapshot_bin_file)',
+            '<(gen_snapshot_stamp_file)',
           ],
           'action': [
             'python',
@@ -443,7 +440,8 @@
             '<(PRODUCT_DIR)/<(EXECUTABLE_PREFIX)gen_snapshot<(EXECUTABLE_SUFFIX)',
             '--vm_output_bin', '<(vm_isolate_snapshot_bin_file)',
             '--output_bin', '<(isolate_snapshot_bin_file)',
-            '--target_os', '<(OS)'
+            '--target_os', '<(OS)',
+            '--timestamp_file', '<(gen_snapshot_stamp_file)',
           ],
           'message': 'Generating ''<(vm_isolate_snapshot_bin_file)'' ''<(isolate_snapshot_bin_file)'' files.'
         },
@@ -462,9 +460,8 @@
           'action_name': 'generate_snapshot_file',
           'inputs': [
             '../tools/create_snapshot_file.py',
+            '<(gen_snapshot_stamp_file)',
             '<(snapshot_in_cc_file)',
-            '<(vm_isolate_snapshot_bin_file)',
-            '<(isolate_snapshot_bin_file)',
           ],
           'outputs': [
             '<(snapshot_cc_file)',
@@ -482,12 +479,40 @@
       ]
     },
     {
-      'target_name': 'generate_resources_cc_file',
+      'target_name': 'generate_observatory_assets_cc_file',
       'type': 'none',
       'toolsets':['host'],
       'dependencies': [
         'build_observatory#host',
       ],
+      'actions': [
+        {
+          'action_name': 'generate_observatory_assets_cc_file',
+          'inputs': [
+            '../tools/create_archive.py',
+            '<(PRODUCT_DIR)/observatory/deployed/web/index.html'
+          ],
+          'outputs': [
+            '<(observatory_assets_cc_file)',
+          ],
+          'action': [
+            'python',
+            'tools/create_archive.py',
+            '--output', '<(observatory_assets_cc_file)',
+            '--tar_output', '<(observatory_assets_tar_file)',
+            '--outer_namespace', 'dart',
+            '--inner_namespace', 'bin',
+            '--name', 'observatory_assets_archive',
+            '--client_root', '<(PRODUCT_DIR)/observatory/deployed/web/',
+          ],
+          'message': 'Generating ''<(observatory_assets_cc_file)'' file.'
+        },
+      ]
+    },
+    {
+      'target_name': 'generate_resources_cc_file',
+      'type': 'none',
+      'toolsets':['host'],
       'includes': [
         'resources_sources.gypi',
       ],
@@ -496,8 +521,6 @@
           'action_name': 'generate_resources_cc',
           'inputs': [
             '../tools/create_resources.py',
-            # The following two files are used to trigger a rebuild.
-            '<(PRODUCT_DIR)/observatory/deployed/web/index.html',
             '<@(_sources)',
           ],
           'outputs': [
@@ -506,13 +529,11 @@
           'action': [
             'python',
             'tools/create_resources.py',
-            '--compress',
             '--output', '<(resources_cc_file)',
             '--outer_namespace', 'dart',
             '--inner_namespace', 'bin',
             '--table_name', 'service_bin',
             '--root_prefix', 'bin/',
-            '--client_root', '<(PRODUCT_DIR)/observatory/deployed/web/',
             '<@(_sources)'
           ],
           'message': 'Generating ''<(resources_cc_file)'' file.'
@@ -562,6 +583,7 @@
         'build_observatory#host',
         'generate_snapshot_file#host',
         'generate_resources_cc_file#host',
+        'generate_observatory_assets_cc_file#host',
       ],
       'include_dirs': [
         '..',
@@ -577,6 +599,7 @@
         'vmservice_impl.h',
         '<(snapshot_cc_file)',
         '<(resources_cc_file)',
+        '<(observatory_assets_cc_file)',
       ],
       'conditions': [
         ['OS=="win"', {
@@ -631,6 +654,7 @@
         '<(io_cc_file)',
         '<(io_patch_cc_file)',
         '<(bootstrap_resources_cc_file)',
+        'observatory_assets_empty.cc',
         'snapshot_empty.cc',
       ],
       'conditions': [
@@ -666,6 +690,7 @@
         'libdart_builtin',
         'libdart_io',
         'generate_resources_cc_file#host',
+        'generate_observatory_assets_cc_file#host',
       ],
       'include_dirs': [
         '..',
@@ -684,6 +709,7 @@
         '<(io_cc_file)',
         '<(io_patch_cc_file)',
         '<(resources_cc_file)',
+        '<(observatory_assets_cc_file)',
         'snapshot_empty.cc',
       ],
       'conditions': [
@@ -768,6 +794,15 @@
           },
         }],
       ],
+      'configurations': {
+        'Dart_Linux_Base': {
+          # Have the linker add all symbols to the dynamic symbol table
+          # so that extensions can look them up dynamically in the binary.
+          'ldflags': [
+            '-rdynamic',
+          ],
+        },
+      },
     },
     {
       'target_name': 'test_extension',

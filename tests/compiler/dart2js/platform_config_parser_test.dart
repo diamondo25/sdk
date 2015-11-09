@@ -104,6 +104,15 @@ name:value""",
     "A": {"name": "value"}
   });
 
+  // Ok, whitespace is trimmed away.
+  test(
+      """
+[ AA ]
+ name\t:  value """,
+      {
+        "A": {"name": "value"}
+      });
+
   // Duplicate property name.
   test("""
 [AA]

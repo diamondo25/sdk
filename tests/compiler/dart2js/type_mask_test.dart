@@ -2,11 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:async_helper/async_helper.dart';
 import 'package:expect/expect.dart';
-import "package:async_helper/async_helper.dart";
+import 'package:compiler/src/types/types.dart';
+
 import 'compiler_helper.dart';
-import 'parser_helper.dart';
-import "package:compiler/src/types/types.dart";
 
 const String CODE = """
 class A {}
@@ -23,7 +23,7 @@ main() {
   var compiler = compilerFor(CODE, uri);
   var classWorld = compiler.world;
 
-  asyncTest(() => compiler.runCompiler(uri).then((_) {
+  asyncTest(() => compiler.run(uri).then((_) {
     var classA = findElement(compiler, 'A');
     var classB = findElement(compiler, 'B');
     var classC = findElement(compiler, 'C');
@@ -37,8 +37,8 @@ main() {
     var subclassA = new TypeMask.nonNullSubclass(classA, classWorld);
     var subtypeA = new TypeMask.nonNullSubtype(classA, classWorld);
 
-    var subclassObject = new TypeMask.nonNullSubclass(compiler.objectClass,
-        classWorld);
+    var subclassObject = new TypeMask.nonNullSubclass(
+        compiler.coreClasses.objectClass, classWorld);
 
     var unionABC = UnionTypeMask.unionOf([exactA, exactB, exactC], classWorld);
     var unionABnC = UnionTypeMask.unionOf([exactA, exactB.nullable(), exactC],

@@ -18,7 +18,6 @@ async: async/async.dart
 collection: collection/collection.dart
 convert: convert/convert.dart
 core: core/core.dart
-profiler: profiler/profiler.dart
 developer: developer/developer.dart
 io: io/io.dart
 isolate: isolate/isolate.dart

@@ -14,7 +14,7 @@
 
 namespace dart {
 
-DECLARE_FLAG(int, profile_depth);
+DECLARE_FLAG(int, max_profile_depth);
 DECLARE_FLAG(int, profile_period);
 
 DEFINE_FLAG(bool, trace_profiler, false, "Trace profiler.");
@@ -58,7 +58,7 @@ class DeoptimizedCodeSet : public ZoneAllocated {
       return false;
     }
     NoSafepointScope no_safepoint_scope;
-    for (intptr_t i = 0; array.Length(); i++) {
+    for (intptr_t i = 0; i < array.Length(); i++) {
       if (code.raw() == array.At(i)) {
         return true;
       }
@@ -984,18 +984,18 @@ class ProfileBuilder : public ValueObject {
     kNumProfileInfoKind,
   };
 
-  ProfileBuilder(Isolate* isolate,
+  ProfileBuilder(Thread* thread,
                  SampleFilter* filter,
                  Profile::TagOrder tag_order,
                  intptr_t extra_tags,
                  Profile* profile)
-      : isolate_(isolate),
+      : thread_(thread),
         vm_isolate_(Dart::vm_isolate()),
         filter_(filter),
         tag_order_(tag_order),
         extra_tags_(extra_tags),
         profile_(profile),
-        deoptimized_code_(new DeoptimizedCodeSet(isolate)),
+        deoptimized_code_(new DeoptimizedCodeSet(thread->isolate())),
         null_code_(Code::ZoneHandle()),
         null_function_(Function::ZoneHandle()),
         tick_functions_(false),
@@ -1051,12 +1051,7 @@ class ProfileBuilder : public ValueObject {
 
   void FilterSamples() {
     ScopeTimer sw("ProfileBuilder::FilterSamples", FLAG_trace_profiler);
-    MutexLocker profiler_data_lock(isolate_->profiler_data_mutex());
-    IsolateProfilerData* profiler_data = isolate_->profiler_data();
-    if (profiler_data == NULL) {
-      return;
-    }
-    SampleBuffer* sample_buffer = profiler_data->sample_buffer();
+    SampleBuffer* sample_buffer = Profiler::sample_buffer();
     if (sample_buffer == NULL) {
       return;
     }
@@ -1845,10 +1840,10 @@ class ProfileBuilder : public ValueObject {
   ProfileCode* CreateProfileCode(uword pc) {
     const intptr_t kDartCodeAlignment = OS::PreferredCodeAlignment();
     const intptr_t kDartCodeAlignmentMask = ~(kDartCodeAlignment - 1);
-    Code& code = Code::Handle(isolate_);
+    Code& code = Code::Handle(thread_->zone());
 
     // Check current isolate for pc.
-    if (isolate_->heap()->CodeContains(pc)) {
+    if (thread_->isolate()->heap()->CodeContains(pc)) {
       code ^= Code::LookupCode(pc);
       if (!code.IsNull()) {
         deoptimized_code_->Add(code);
@@ -1875,6 +1870,16 @@ class ProfileBuilder : public ValueObject {
                               code.compile_timestamp(),
                               code);
       }
+      // Precompiled instructions are in the VM isolate, but the code (except
+      // stubs) is in the current isolate.
+      code ^= Code::LookupCode(pc);
+      if (!code.IsNull()) {
+        return new ProfileCode(ProfileCode::kDartCode,
+                              code.EntryPoint(),
+                              code.EntryPoint() + code.Size(),
+                              code.compile_timestamp(),
+                              code);
+      }
       return new ProfileCode(ProfileCode::kCollectedCode,
                             pc,
                             (pc & kDartCodeAlignmentMask) + kDartCodeAlignment,
@@ -1894,6 +1899,13 @@ class ProfileBuilder : public ValueObject {
                             0,
                             code);
     }
+
+#if defined(HOST_ARCH_ARM)
+    // The symbol for a Thumb function will be xxx1, but we may have samples
+    // at function entry which will have pc xxx0.
+    native_start &= ~1;
+#endif
+
     ASSERT(pc >= native_start);
     ProfileCode* profile_code =
         new ProfileCode(ProfileCode::kNativeCode,
@@ -1902,7 +1914,7 @@ class ProfileBuilder : public ValueObject {
                        0,
                        code);
     profile_code->SetName(native_name);
-    free(native_name);
+    NativeSymbolResolver::FreeSymbolName(native_name);
     return profile_code;
   }
 
@@ -1957,7 +1969,7 @@ class ProfileBuilder : public ValueObject {
     return (extra_tags_ & extra_tags_bits) != 0;
   }
 
-  Isolate* isolate_;
+  Thread* thread_;
   Isolate* vm_isolate_;
   SampleFilter* filter_;
   Profile::TagOrder tag_order_;
@@ -1971,7 +1983,7 @@ class ProfileBuilder : public ValueObject {
 
   ProcessedSampleBuffer* samples_;
   ProfileInfoKind info_kind_;
-};
+};  // ProfileBuilder.
 
 
 Profile::Profile(Isolate* isolate)
@@ -1991,10 +2003,11 @@ Profile::Profile(Isolate* isolate)
 }
 
 
-void Profile::Build(SampleFilter* filter,
+void Profile::Build(Thread* thread,
+                    SampleFilter* filter,
                     TagOrder tag_order,
                     intptr_t extra_tags) {
-  ProfileBuilder builder(isolate_, filter, tag_order, extra_tags, this);
+  ProfileBuilder builder(thread, filter, tag_order, extra_tags, this);
   builder.Build();
 }
 
@@ -2043,7 +2056,7 @@ void Profile::PrintJSON(JSONStream* stream) {
   obj.AddProperty("samplePeriod",
                   static_cast<intptr_t>(FLAG_profile_period));
   obj.AddProperty("stackDepth",
-                  static_cast<intptr_t>(FLAG_profile_depth));
+                  static_cast<intptr_t>(FLAG_max_profile_depth));
   obj.AddProperty("sampleCount", sample_count());
   obj.AddProperty("timeSpan", MicrosecondsToSeconds(GetTimeSpan()));
   {
@@ -2194,33 +2207,28 @@ intptr_t ProfileTrieWalker::SiblingCount() {
 }
 
 
-void ProfilerService::PrintJSONImpl(Isolate* isolate,
+void ProfilerService::PrintJSONImpl(Thread* thread,
                                     JSONStream* stream,
                                     Profile::TagOrder tag_order,
                                     intptr_t extra_tags,
                                     SampleFilter* filter) {
-  // Disable profile interrupts while processing the buffer.
-  Profiler::EndExecution(isolate);
+  Isolate* isolate = thread->isolate();
+  // Disable thread interrupts while processing the buffer.
+  DisableThreadInterruptsScope dtis(thread);
 
-  {
-    MutexLocker profiler_data_lock(isolate->profiler_data_mutex());
-    IsolateProfilerData* profiler_data = isolate->profiler_data();
-    if (profiler_data == NULL) {
-      stream->PrintError(kFeatureDisabled, NULL);
-      return;
-    }
+  SampleBuffer* sample_buffer = Profiler::sample_buffer();
+  if (sample_buffer == NULL) {
+    stream->PrintError(kFeatureDisabled, NULL);
+    return;
   }
 
   {
-    StackZone zone(isolate);
-    HANDLESCOPE(isolate);
+    StackZone zone(thread);
+    HANDLESCOPE(thread);
     Profile profile(isolate);
-    profile.Build(filter, tag_order, extra_tags);
+    profile.Build(thread, filter, tag_order, extra_tags);
     profile.PrintJSON(stream);
   }
-
-  // Enable profile interrupts.
-  Profiler::BeginExecution(isolate);
 }
 
 
@@ -2239,9 +2247,10 @@ class NoAllocationSampleFilter : public SampleFilter {
 void ProfilerService::PrintJSON(JSONStream* stream,
                                 Profile::TagOrder tag_order,
                                 intptr_t extra_tags) {
-  Isolate* isolate = Isolate::Current();
+  Thread* thread = Thread::Current();
+  Isolate* isolate = thread->isolate();
   NoAllocationSampleFilter filter(isolate);
-  PrintJSONImpl(isolate, stream, tag_order, extra_tags, &filter);
+  PrintJSONImpl(thread, stream, tag_order, extra_tags, &filter);
 }
 
 
@@ -2266,31 +2275,27 @@ class ClassAllocationSampleFilter : public SampleFilter {
 void ProfilerService::PrintAllocationJSON(JSONStream* stream,
                                           Profile::TagOrder tag_order,
                                           const Class& cls) {
-  Isolate* isolate = Isolate::Current();
+  Thread* thread = Thread::Current();
+  Isolate* isolate = thread->isolate();
   ClassAllocationSampleFilter filter(isolate, cls);
-  PrintJSONImpl(isolate, stream, tag_order, kNoExtraTags, &filter);
+  PrintJSONImpl(thread, stream, tag_order, kNoExtraTags, &filter);
 }
 
 
 void ProfilerService::ClearSamples() {
-  Isolate* isolate = Isolate::Current();
-
-  // Disable profile interrupts while processing the buffer.
-  Profiler::EndExecution(isolate);
-
-  MutexLocker profiler_data_lock(isolate->profiler_data_mutex());
-  IsolateProfilerData* profiler_data = isolate->profiler_data();
-  if (profiler_data == NULL) {
+  SampleBuffer* sample_buffer = Profiler::sample_buffer();
+  if (sample_buffer == NULL) {
     return;
   }
-  SampleBuffer* sample_buffer = profiler_data->sample_buffer();
-  ASSERT(sample_buffer != NULL);
+
+  Thread* thread = Thread::Current();
+  Isolate* isolate = thread->isolate();
+
+  // Disable thread interrupts while processing the buffer.
+  DisableThreadInterruptsScope dtis(thread);
 
   ClearProfileVisitor clear_profile(isolate);
   sample_buffer->VisitSamples(&clear_profile);
-
-  // Enable profile interrupts.
-  Profiler::BeginExecution(isolate);
 }
 
 }  // namespace dart

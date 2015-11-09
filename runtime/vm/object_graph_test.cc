@@ -39,7 +39,7 @@ class CounterVisitor : public ObjectGraph::Visitor {
 
 
 TEST_CASE(ObjectGraph) {
-  Isolate* isolate = Isolate::Current();
+  Isolate* isolate = thread->isolate();
   // Create a simple object graph with objects a, b, c, d:
   //  a+->b+->c
   //  +   +
@@ -65,7 +65,7 @@ TEST_CASE(ObjectGraph) {
     b = Array::null();
     c = Array::null();
     d = Array::null();
-    ObjectGraph graph(isolate);
+    ObjectGraph graph(thread);
     {
       // Compare count and size when 'b' is/isn't skipped.
       CounterVisitor with(Object::null(), Object::null());
@@ -96,10 +96,10 @@ TEST_CASE(ObjectGraph) {
     b ^= a.At(10);
     c ^= b.At(0);
     b = Array::null();
-    ObjectGraph graph(isolate);
+    ObjectGraph graph(thread);
     // A retaining path should end like this: c <- b <- a <- ...
     {
-      HANDLESCOPE(isolate);
+      HANDLESCOPE(thread);
       // Test null, empty, and length 1 array.
       intptr_t null_length = graph.RetainingPath(&c, Object::null_array());
       intptr_t empty_length = graph.RetainingPath(&c, Object::empty_array());
@@ -110,7 +110,7 @@ TEST_CASE(ObjectGraph) {
       EXPECT_LE(3, null_length);
     }
     {
-      HANDLESCOPE(isolate);
+      HANDLESCOPE(thread);
       Array& path = Array::Handle(Array::New(6, Heap::kNew));
       // Trigger a full GC to increase probability of concurrent tasks.
       isolate->heap()->CollectAllGarbage();

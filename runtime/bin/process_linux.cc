@@ -167,6 +167,7 @@ class ExitCodeHandler {
   // Entry point for the separate exit code handler thread started by
   // the ExitCodeHandler.
   static void ExitCodeHandlerEntry(uword param) {
+    pid_t pid = 0;
     int status = 0;
     while (true) {
       {
@@ -181,46 +182,36 @@ class ExitCodeHandler {
         }
       }
 
-      siginfo_t sig_info;
-      if (TEMP_FAILURE_RETRY(
-              waitid(P_ALL, 0, &sig_info, WEXITED | WNOWAIT)) == -1) {
-        continue;
-      }
-
-      pid_t pid = sig_info.si_pid;
-      intptr_t exit_code_fd = ProcessInfoList::LookupProcessExitFd(pid);
-      if (exit_code_fd == 0) {
-        // We do now know the PID - don't act until we have it.
-        continue;
-      }
-
-      // Known PID - unzoombie it.
-      VOID_TEMP_FAILURE_RETRY(waitpid(pid, &status, WNOHANG));
-      int exit_code = 0;
-      int negative = 0;
-      if (WIFEXITED(status)) {
-        exit_code = WEXITSTATUS(status);
-      }
-      if (WIFSIGNALED(status)) {
-        exit_code = WTERMSIG(status);
-        negative = 1;
-      }
-      int message[2] = { exit_code, negative };
-      ssize_t result =
-          FDUtils::WriteToBlocking(exit_code_fd, &message, sizeof(message));
-      // If the process has been closed, the read end of the exit
-      // pipe has been closed. It is therefore not a problem that
-      // write fails with a broken pipe error. Other errors should
-      // not happen.
-      if (result != -1 && result != sizeof(message)) {
-        FATAL("Failed to write entire process exit message");
-      } else if (result == -1 && errno != EPIPE) {
-        FATAL1("Failed to write exit code: %d", errno);
-      }
-      ProcessInfoList::RemoveProcess(pid);
-      {
-        MonitorLocker locker(monitor_);
-        process_count_--;
+      if ((pid = TEMP_FAILURE_RETRY(wait(&status))) > 0) {
+        int exit_code = 0;
+        int negative = 0;
+        if (WIFEXITED(status)) {
+          exit_code = WEXITSTATUS(status);
+        }
+        if (WIFSIGNALED(status)) {
+          exit_code = WTERMSIG(status);
+          negative = 1;
+        }
+        intptr_t exit_code_fd = ProcessInfoList::LookupProcessExitFd(pid);
+        if (exit_code_fd != 0) {
+          int message[2] = { exit_code, negative };
+          ssize_t result =
+              FDUtils::WriteToBlocking(exit_code_fd, &message, sizeof(message));
+          // If the process has been closed, the read end of the exit
+          // pipe has been closed. It is therefore not a problem that
+          // write fails with a broken pipe error. Other errors should
+          // not happen.
+          if (result != -1 && result != sizeof(message)) {
+            FATAL("Failed to write entire process exit message");
+          } else if (result == -1 && errno != EPIPE) {
+            FATAL1("Failed to write exit code: %d", errno);
+          }
+          ProcessInfoList::RemoveProcess(pid);
+          {
+            MonitorLocker locker(monitor_);
+            process_count_--;
+          }
+        }
       }
     }
   }
@@ -301,7 +292,7 @@ class ProcessStarter {
     if (err != 0) return err;
 
     // Fork to create the new process.
-    pid_t pid = TEMP_FAILURE_RETRY(vfork());
+    pid_t pid = TEMP_FAILURE_RETRY(fork());
     if (pid < 0) {
       // Failed to fork.
       return CleanupAndReturnError();
@@ -319,6 +310,16 @@ class ProcessStarter {
     if (mode_ == kNormal) {
       err = RegisterProcess(pid);
       if (err != 0) return err;
+    }
+
+    // Notify child process to start. This is done to delay the call to exec
+    // until the process is registered above, and we are ready to receive the
+    // exit code.
+    char msg = '1';
+    int bytes_written =
+        FDUtils::WriteToBlocking(read_in_[1], &msg, sizeof(msg));
+    if (bytes_written != sizeof(msg)) {
+      return CleanupAndReturnError();
     }
 
     // Read the result of executing the child process.
@@ -407,6 +408,13 @@ class ProcessStarter {
 
 
   void NewProcess() {
+    // Wait for parent process before setting up the child process.
+    char msg;
+    int bytes_read = FDUtils::ReadFromBlocking(read_in_[0], &msg, sizeof(msg));
+    if (bytes_read != sizeof(msg)) {
+      perror("Failed receiving notification message");
+      exit(1);
+    }
     if (mode_ == kNormal) {
       ExecProcess();
     } else {
@@ -434,14 +442,11 @@ class ProcessStarter {
     }
 
     if (program_environment_ != NULL) {
-      VOID_TEMP_FAILURE_RETRY(
-          execvpe(path_, const_cast<char* const*>(program_arguments_),
-                  program_environment_));
-    } else {
-      VOID_TEMP_FAILURE_RETRY(
-          execvp(path_, const_cast<char* const*>(program_arguments_)));
+      environ = program_environment_;
     }
 
+    VOID_TEMP_FAILURE_RETRY(
+        execvp(path_, const_cast<char* const*>(program_arguments_)));
 
     ReportChildError();
   }
@@ -451,10 +456,14 @@ class ProcessStarter {
     if (mode_ == kDetached) {
       ASSERT(write_out_[0] == -1);
       ASSERT(write_out_[1] == -1);
-      ASSERT(read_in_[0] == -1);
-      ASSERT(read_in_[1] == -1);
       ASSERT(read_err_[0] == -1);
       ASSERT(read_err_[1] == -1);
+      // For a detached process the pipe to connect stdout is only used for
+      // signaling when to do the first fork.
+      VOID_TEMP_FAILURE_RETRY(close(read_in_[0]));
+      read_in_[0] = -1;
+      VOID_TEMP_FAILURE_RETRY(close(read_in_[1]));
+      read_in_[1] = -1;
     } else {
       // Don't close any fds if keeping stdio open to the detached process.
       ASSERT(mode_ == kDetachedWithStdio);
@@ -496,7 +505,7 @@ class ProcessStarter {
       }
     } else {
       // Exit the intermeiate process.
-      _exit(0);
+      exit(0);
     }
   }
 

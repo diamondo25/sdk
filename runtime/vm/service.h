@@ -15,6 +15,7 @@ namespace dart {
 
 class Array;
 class EmbedderServiceHandler;
+class Error;
 class GCEvent;
 class GrowableObjectArray;
 class Instance;
@@ -39,8 +40,10 @@ class ServiceIdZone {
 
 class RingServiceIdZone : public ServiceIdZone {
  public:
-  explicit RingServiceIdZone(ObjectIdRing* ring, ObjectIdRing::IdPolicy policy);
+  RingServiceIdZone();
   virtual ~RingServiceIdZone();
+
+  void Init(ObjectIdRing* ring, ObjectIdRing::IdPolicy policy);
 
   // Returned string will be zone allocated.
   virtual char* GetServiceId(const Object& obj);
@@ -98,8 +101,11 @@ class Service : public AllStatic {
       Dart_ServiceStreamListenCallback listen_callback,
       Dart_ServiceStreamCancelCallback cancel_callback);
 
+  static void SetGetServiceAssetsCallback(
+      Dart_GetVMServiceAssetsArchive get_service_assets);
+
   static void SendEchoEvent(Isolate* isolate, const char* text);
-  static void SendGraphEvent(Isolate* isolate);
+  static void SendGraphEvent(Thread* thread);
   static void SendInspectEvent(Isolate* isolate, const Object& inspectee);
 
   static void SendEmbedderEvent(Isolate* isolate,
@@ -118,7 +124,15 @@ class Service : public AllStatic {
                            const Object& error,
                            const Instance& stack_trace);
 
+  static void PostError(const String& method_name,
+                        const Array& parameter_keys,
+                        const Array& parameter_values,
+                        const Instance& reply_port,
+                        const Instance& id,
+                        const Error& error);
+
   // Well-known streams.
+  static StreamInfo vm_stream;
   static StreamInfo isolate_stream;
   static StreamInfo debug_stream;
   static StreamInfo gc_stream;
@@ -129,12 +143,16 @@ class Service : public AllStatic {
   static bool ListenStream(const char* stream_id);
   static void CancelStream(const char* stream_id);
 
+  static RawObject* RequestAssets();
+
   static Dart_ServiceStreamListenCallback stream_listen_callback() {
     return stream_listen_callback_;
   }
   static Dart_ServiceStreamCancelCallback stream_cancel_callback() {
     return stream_cancel_callback_;
   }
+
+  static void PrintJSONForVM(JSONStream* js, bool ref);
 
  private:
   static void InvokeMethod(Isolate* isolate, const Array& message);
@@ -144,7 +162,12 @@ class Service : public AllStatic {
 
   static EmbedderServiceHandler* FindIsolateEmbedderHandler(const char* name);
   static EmbedderServiceHandler* FindRootEmbedderHandler(const char* name);
-
+  static void ScheduleExtensionHandler(const Instance& handler,
+                                       const String& method_name,
+                                       const Array& parameter_keys,
+                                       const Array& parameter_values,
+                                       const Instance& reply_port,
+                                       const Instance& id);
   static void SendEvent(const char* stream_id,
                         const char* event_type,
                         const Object& eventMessage);
@@ -164,6 +187,7 @@ class Service : public AllStatic {
   static EmbedderServiceHandler* root_service_handler_head_;
   static Dart_ServiceStreamListenCallback stream_listen_callback_;
   static Dart_ServiceStreamCancelCallback stream_cancel_callback_;
+  static Dart_GetVMServiceAssetsArchive get_service_assets_callback_;
 
   static bool needs_isolate_events_;
   static bool needs_debug_events_;

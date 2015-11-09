@@ -4,28 +4,52 @@
 
 library simple_types_inferrer;
 
-import '../closure.dart' show ClosureClassMap, ClosureScope;
-import '../constants/values.dart' show ConstantValue, IntConstantValue;
-import '../cps_ir/cps_ir_nodes.dart' as cps_ir show Node;
-import '../dart_types.dart'
-    show DartType, InterfaceType, FunctionType, TypeKind;
+import '../closure.dart' show
+    ClosureClassMap,
+    ClosureScope;
+import '../common.dart';
+import '../common/names.dart' show
+    Selectors;
+import '../compiler.dart' show
+    Compiler;
+import '../constants/values.dart' show
+    ConstantValue,
+    IntConstantValue;
+import '../core_types.dart' show
+    CoreClasses,
+    CoreTypes;
+import '../cps_ir/cps_ir_nodes.dart' as cps_ir show
+    Node;
+import '../dart_types.dart' show
+    DartType,
+    FunctionType,
+    InterfaceType,
+    TypeKind;
 import '../elements/elements.dart';
 import '../js_backend/js_backend.dart' as js;
 import '../native/native.dart' as native;
+import '../resolution/tree_elements.dart' show
+    TreeElements;
 import '../resolution/operators.dart' as op;
 import '../tree/tree.dart' as ast;
-import '../types/types.dart'
-    show TypesInferrer, FlatTypeMask, TypeMask, ContainerTypeMask,
-         ElementTypeMask, ValueTypeMask, TypeSystem, MinimalInferrerEngine;
-import '../util/util.dart' show Link, Spannable, Setlet;
-import 'inferrer_visitor.dart';
+import '../types/types.dart' show
+    TypesInferrer,
+    FlatTypeMask,
+    TypeMask,
+    ContainerTypeMask,
+    ValueTypeMask;
+import '../util/util.dart' show
+    Link,
+    Setlet;
+import '../universe/call_structure.dart' show
+    CallStructure;
+import '../universe/selector.dart' show
+    Selector;
+import '../universe/side_effects.dart' show
+    SideEffects;
+import '../world.dart' show ClassWorld;
 
-// BUG(8802): There's a bug in the analyzer that makes the re-export
-// of Selector from dart2jslib.dart fail. For now, we work around that
-// by importing universe.dart explicitly and disabling the re-export.
-import '../dart2jslib.dart' hide Selector, TypedSelector;
-import '../universe/universe.dart'
-    show Selector, SideEffects, TypedSelector, CallStructure;
+import 'inferrer_visitor.dart';
 
 /**
  * An implementation of [TypeSystem] for [TypeMask].
@@ -41,7 +65,7 @@ class TypeMaskSystem implements TypeSystem<TypeMask> {
                       DartType annotation,
                       {bool isNullable: true}) {
     if (annotation.treatAsDynamic) return type;
-    if (annotation.element == compiler.objectClass) return type;
+    if (annotation.isObject) return type;
     TypeMask otherType;
     if (annotation.isTypedef || annotation.isFunctionType) {
       otherType = functionType;
@@ -96,9 +120,13 @@ class TypeMaskSystem implements TypeSystem<TypeMask> {
   TypeMask get constMapType => compiler.typesTask.constMapType;
   TypeMask get stringType => compiler.typesTask.stringType;
   TypeMask get typeType => compiler.typesTask.typeType;
+  TypeMask get syncStarIterableType => compiler.typesTask.syncStarIterableType;
+  TypeMask get asyncFutureType => compiler.typesTask.asyncFutureType;
+  TypeMask get asyncStarStreamType => compiler.typesTask.asyncStarStreamType;
   bool isNull(TypeMask mask) => mask.isEmpty && mask.isNullable;
 
   TypeMask stringLiteralType(ast.DartString value) => stringType;
+  TypeMask boolLiteralType(ast.LiteralBool value) => boolType;
 
   TypeMask nonNullSubtype(ClassElement type)
       => new TypeMask.nonNullSubtype(type.declaration, classWorld);
@@ -184,6 +212,10 @@ abstract class InferrerEngine<T, V extends TypeSystem>
   InferrerEngine(Compiler compiler, this.types)
       : this.compiler = compiler,
         this.classWorld = compiler.world;
+
+  CoreClasses get coreClasses => compiler.coreClasses;
+
+  CoreTypes get coreTypes => compiler.coreTypes;
 
   /**
    * Records the default type of parameter [parameter].
@@ -366,18 +398,20 @@ abstract class InferrerEngine<T, V extends TypeSystem>
     for (var type in typesReturned) {
       T mappedType;
       if (type == native.SpecialType.JsObject) {
-        mappedType = types.nonNullExact(compiler.objectClass);
-      } else if (type.element == compiler.stringClass) {
+        mappedType = types.nonNullExact(coreClasses.objectClass);
+      } else if (type == coreTypes.stringType) {
         mappedType = types.stringType;
-      } else if (type.element == compiler.intClass) {
+      } else if (type == coreTypes.intType) {
         mappedType = types.intType;
-      } else if (type.element == compiler.doubleClass) {
-        mappedType = types.doubleType;
-      } else if (type.element == compiler.numClass) {
+      } else if (type == coreTypes.numType ||
+                 type == coreTypes.doubleType) {
+        // Note: the backend double class is specifically for non-integer
+        // doubles, and a native behavior returning 'double' does not guarantee
+        // a non-integer return type, so we return the number type for those.
         mappedType = types.numType;
-      } else if (type.element == compiler.boolClass) {
+      } else if (type == coreTypes.boolType) {
         mappedType = types.boolType;
-      } else if (type.element == compiler.nullClass) {
+      } else if (type == coreTypes.nullType) {
         mappedType = types.nullType;
       } else if (type.isVoid) {
         mappedType = types.nullType;
@@ -415,21 +449,21 @@ abstract class InferrerEngine<T, V extends TypeSystem>
       elements.setTypeMask(node, mask);
     } else {
       assert(astNode.asForIn() != null);
-      if (selector == compiler.iteratorSelector) {
+      if (selector == Selectors.iterator) {
         elements.setIteratorTypeMask(node, mask);
-      } else if (selector == compiler.currentSelector) {
+      } else if (selector == Selectors.current) {
         elements.setCurrentTypeMask(node, mask);
       } else {
-        assert(selector == compiler.moveNextSelector);
+        assert(selector == Selectors.moveNext);
         elements.setMoveNextTypeMask(node, mask);
       }
     }
   }
 
   bool isNativeElement(Element element) {
-    if (element.isNative) return true;
+    if (compiler.backend.isNative(element)) return true;
     return element.isClassMember
-        && element.enclosingClass.isNative
+        && compiler.backend.isNative(element.enclosingClass)
         && element.isField;
   }
 
@@ -531,7 +565,7 @@ class SimpleTypeInferrerVisitor<T>
       inferrer.setDefaultTypeOfParameter(element, type);
     });
 
-    if (analyzedElement.isNative) {
+    if (compiler.backend.isNative(analyzedElement)) {
       // Native methods do not have a body, and we currently just say
       // they return dynamic.
       return types.dynamicType;
@@ -567,7 +601,17 @@ class SimpleTypeInferrerVisitor<T>
         synthesizeForwardingCall(spannable, constructor.definingConstructor);
       } else {
         visitingInitializers = true;
-        visit(node.initializers);
+        if (node.initializers != null) {
+          for (ast.Node initializer in node.initializers) {
+            ast.SendSet fieldInitializer = initializer.asSendSet();
+            if (fieldInitializer != null) {
+              handleSendSet(fieldInitializer);
+            } else {
+              Element element = elements[initializer];
+              handleConstructorSend(initializer, element);
+            }
+          }
+        }
         visitingInitializers = false;
         // For a generative constructor like: `Foo();`, we synthesize
         // a call to the default super constructor (the one that takes
@@ -609,21 +653,37 @@ class SimpleTypeInferrerVisitor<T>
         locals.update(element, inferrer.typeOfElement(element), node);
       });
       visit(node.body);
-      if (function.asyncMarker != AsyncMarker.SYNC) {
-        // TODO(herhut): Should be type Future/Iterable/Stream instead of
-        // dynamic.
-        returnType = inferrer.addReturnTypeFor(
-            analyzedElement, returnType, types.dynamicType);
-      } else if (returnType == null) {
-        // No return in the body.
-        returnType = locals.seenReturnOrThrow
-            ? types.nonNullEmpty()  // Body always throws.
-            : types.nullType;
-      } else if (!locals.seenReturnOrThrow) {
-        // We haven't seen returns on all branches. So the method may
-        // also return null.
-        returnType = inferrer.addReturnTypeFor(
-            analyzedElement, returnType, types.nullType);
+      switch (function.asyncMarker) {
+        case AsyncMarker.SYNC:
+          if (returnType == null) {
+            // No return in the body.
+            returnType = locals.seenReturnOrThrow
+                ? types.nonNullEmpty()  // Body always throws.
+                : types.nullType;
+          } else if (!locals.seenReturnOrThrow) {
+            // We haven't seen returns on all branches. So the method may
+            // also return null.
+            returnType = inferrer.addReturnTypeFor(
+                analyzedElement, returnType, types.nullType);
+          }
+          break;
+
+        case AsyncMarker.SYNC_STAR:
+          // TODO(asgerf): Maybe make a ContainerTypeMask for these? The type
+          //               contained is the method body's return type.
+          returnType = inferrer.addReturnTypeFor(
+              analyzedElement, returnType, types.syncStarIterableType);
+          break;
+
+        case AsyncMarker.ASYNC:
+          returnType = inferrer.addReturnTypeFor(
+                analyzedElement, returnType, types.asyncFutureType);
+          break;
+
+        case AsyncMarker.ASYNC_STAR:
+          returnType = inferrer.addReturnTypeFor(
+                analyzedElement, returnType, types.asyncStarStreamType);
+          break;
       }
     }
 
@@ -815,7 +875,13 @@ class SimpleTypeInferrerVisitor<T>
         isCallOnThis = true;
       }
     } else {
-      receiverType = visit(node.receiver);
+      if (node.receiver != null) {
+        Element receiver = elements[node.receiver];
+        if (receiver is! PrefixElement && receiver is! ClassElement) {
+          // TODO(johnniwinther): Avoid blindly recursing on the receiver.
+          receiverType = visit(node.receiver);
+        }
+      }
       isCallOnThis = isThisOrSuper(node.receiver);
     }
 
@@ -861,7 +927,7 @@ class SimpleTypeInferrerVisitor<T>
       T getterType;
       T newType;
 
-      if (Elements.isErroneous(element)) return types.dynamicType;
+      if (Elements.isMalformed(element)) return types.dynamicType;
 
       if (Elements.isStaticOrTopLevelField(element)) {
         Element getterElement = elements[node.selector];
@@ -1220,7 +1286,7 @@ class SimpleTypeInferrerVisitor<T>
                           T rhsType,
                           ast.Node rhs) {
     ArgumentsTypes arguments = new ArgumentsTypes<T>([rhsType], null);
-    if (Elements.isErroneous(element)) {
+    if (Elements.isMalformed(element)) {
       // Code will always throw.
     } else if (Elements.isStaticOrTopLevelField(element)) {
       handleStaticSend(node, setterSelector, setterMask, element, arguments);
@@ -1320,20 +1386,6 @@ class SimpleTypeInferrerVisitor<T>
     TypeMask mask = elements.getTypeMask(node);
     return handleStaticSend(
         node, selector, mask, element, null);
-  }
-
-  /// Handle super constructor invocation.
-  @override
-  T handleSuperConstructorInvoke(ast.Send node) {
-    Element element = elements[node];
-    ArgumentsTypes arguments = analyzeArguments(node.arguments);
-    assert(visitingInitializers);
-    seenSuperConstructorCall = true;
-    analyzeSuperConstructorCall(element, arguments);
-    Selector selector = elements.getSelector(node);
-    TypeMask mask = elements.getTypeMask(node);
-    return handleStaticSend(
-        node, selector, mask, element, arguments);
   }
 
   @override
@@ -1446,6 +1498,16 @@ class SimpleTypeInferrerVisitor<T>
   }
 
   @override
+  T visitSuperSetterInvoke(
+      ast.Send node,
+      FunctionElement setter,
+      ast.NodeList arguments,
+      CallStructure callStructure,
+      _) {
+    return handleErroneousSuperSend(node);
+  }
+
+  @override
   T visitSuperIndex(
       ast.Send node,
       MethodElement method,
@@ -1535,20 +1597,6 @@ class SimpleTypeInferrerVisitor<T>
   }
 
   @override
-  T handleAssert(ast.Send node, ast.Node expression) {
-    js.JavaScriptBackend backend = compiler.backend;
-    Element element = backend.assertMethod;
-    ArgumentsTypes<T> arguments =
-        new ArgumentsTypes<T>(<T>[expression.accept(this)], null);
-    return handleStaticSend(
-        node,
-        new Selector.fromElement(element),
-        null,
-        element,
-        arguments);
-  }
-
-  @override
   T handleTypeLiteralInvoke(ast.NodeList arguments) {
     // This is reached when users forget to put a `new` in front of a type
     // literal. The emitter will generate an actual call (even though it is
@@ -1556,12 +1604,6 @@ class SimpleTypeInferrerVisitor<T>
     // as well.
     analyzeArguments(arguments.nodes);
     return super.handleTypeLiteralInvoke(arguments);
-  }
-
-  T visitStaticSend(ast.Send node) {
-    assert(!elements.isAssert(node));
-    Element element = elements[node];
-    return handleConstructorSend(node, element);
   }
 
   /// Handle constructor invocation of [element].
@@ -1634,8 +1676,21 @@ class SimpleTypeInferrerVisitor<T>
     }
   }
 
-  T handleNewExpression(ast.NewExpression node) {
-    return visitStaticSend(node.send);
+  @override
+  T bulkHandleNew(ast.NewExpression node, _) {
+    Element element = elements[node.send];
+    return handleConstructorSend(node.send, element);
+  }
+
+  @override
+  T errorNonConstantConstructorInvoke(
+      ast.NewExpression node,
+      Element element,
+      DartType type,
+      ast.NodeList arguments,
+      CallStructure callStructure,
+      _) {
+    return bulkHandleNew(node, _);
   }
 
   /// Handle invocation of a top level or static field or getter [element].
@@ -1815,15 +1870,6 @@ class SimpleTypeInferrerVisitor<T>
     return new ArgumentsTypes<T>(positional, named);
   }
 
-  T visitGetterSend(ast.Send node) {
-    if (elements[node] is! PrefixElement) {
-      // TODO(johnniwinther): Remove this when no longer called from
-      // [handleSendSet].
-      internalError(node, "Unexpected visitGetterSend");
-    }
-    return null;
-  }
-
   /// Read a local variable, function or parameter.
   T handleLocalGet(ast.Send node, LocalElement local) {
     assert(locals.use(local) != null);
@@ -1855,7 +1901,7 @@ class SimpleTypeInferrerVisitor<T>
   T visitDynamicPropertyGet(
       ast.Send node,
       ast.Node receiver,
-      Selector selector,
+      Name name,
       _) {
     return handleDynamicGet(node);
   }
@@ -1864,7 +1910,7 @@ class SimpleTypeInferrerVisitor<T>
   T visitIfNotNullDynamicPropertyGet(
       ast.Send node,
       ast.Node receiver,
-      Selector selector,
+      Name name,
       _) {
     return handleDynamicGet(node);
   }
@@ -1920,7 +1966,7 @@ class SimpleTypeInferrerVisitor<T>
   @override
   T visitThisPropertyGet(
       ast.Send node,
-      Selector selector,
+      Name name,
       _) {
     return handleDynamicGet(node);
   }
@@ -1988,7 +2034,7 @@ class SimpleTypeInferrerVisitor<T>
       ast.Send node,
       ast.Node expression,
       ast.NodeList arguments,
-      Selector selector,
+      CallStructure callStructure,
       _) {
     return handleCallInvoke(node, expression.accept(this));
    }
@@ -2191,7 +2237,7 @@ class SimpleTypeInferrerVisitor<T>
 
   T visitRedirectingFactoryBody(ast.RedirectingFactoryBody node) {
     Element element = elements.getRedirectingTargetConstructor(node);
-    if (Elements.isErroneous(element)) {
+    if (Elements.isMalformed(element)) {
       recordReturnType(types.dynamicType);
     } else {
       // We don't create a selector for redirecting factories, and
@@ -2256,13 +2302,13 @@ class SimpleTypeInferrerVisitor<T>
   T visitAsyncForIn(ast.AsyncForIn node) {
     T expressionType = visit(node.expression);
 
-    Selector currentSelector = elements.getCurrentSelector(node);
+    Selector currentSelector = Selectors.current;
     TypeMask currentMask = elements.getCurrentTypeMask(node);
-    Selector moveNextSelector = elements.getMoveNextSelector(node);
+    Selector moveNextSelector = Selectors.moveNext;
     TypeMask moveNextMask = elements.getMoveNextTypeMask(node);
 
     js.JavaScriptBackend backend = compiler.backend;
-    Element ctor = backend.getStreamIteratorConstructor();
+    Element ctor = backend.helpers.streamIteratorConstructor;
 
     /// Synthesize a call to the [StreamIterator] constructor.
     T iteratorType = handleStaticSend(node, null, null, ctor,
@@ -2275,11 +2321,11 @@ class SimpleTypeInferrerVisitor<T>
 
   T visitSyncForIn(ast.SyncForIn node) {
     T expressionType = visit(node.expression);
-    Selector iteratorSelector = elements.getIteratorSelector(node);
+    Selector iteratorSelector = Selectors.iterator;
     TypeMask iteratorMask = elements.getIteratorTypeMask(node);
-    Selector currentSelector = elements.getCurrentSelector(node);
+    Selector currentSelector = Selectors.current;
     TypeMask currentMask = elements.getCurrentTypeMask(node);
-    Selector moveNextSelector = elements.getMoveNextSelector(node);
+    Selector moveNextSelector = Selectors.moveNext;
     TypeMask moveNextMask = elements.getMoveNextTypeMask(node);
 
     T iteratorType = handleDynamicSend(
